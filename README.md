@@ -15,13 +15,15 @@ A multimodal deep learning pipeline for melanocytic skin lesion classification c
 > Fusion evaluated on 138/177 patients with both dermoscopy images and clinical reports.  
 > All results: patient-level, 5-fold cross-validation, logistic regression classifier.
 
-**Per-class results (fusion model):**
+**Per-class breakdown across all models:**
 
-| Class | F1 | AUC |
-|-------|:--:|:---:|
-| Dysplastic Nevus | 0.543 ± 0.131 | 0.720 ± 0.084 |
-| Melanoma Stage IA | 0.690 ± 0.079 | 0.814 ± 0.108 |
-| Melanoma In Situ | 0.337 ± 0.100 | 0.564 ± 0.061 |
+| Model | DN F1 | DN AUC | MIA F1 | MIA AUC | Minsitu F1 | Minsitu AUC |
+|-------|:-----:|:------:|:------:|:-------:|:----------:|:-----------:|
+| Pre-trained | 0.512 ± 0.106 | 0.746 ± 0.067 | 0.667 ± 0.142 | 0.813 ± 0.100 | 0.340 ± 0.079 | 0.609 ± 0.056 |
+| Fine-tuned | 0.543 ± 0.131 | 0.720 ± 0.084 | 0.690 ± 0.079 | 0.814 ± 0.108 | 0.337 ± 0.100 | 0.564 ± 0.061 |
+| **Fusion** | **0.601 ± 0.131** | **0.785 ± 0.083** | **0.722 ± 0.093** | **0.890 ± 0.069** | **0.404 ± 0.119** | **0.660 ± 0.111** |
+
+DN = Dysplastic Nevus · MIA = Melanoma Stage IA · Minsitu = Melanoma In Situ
 
 ---
 
