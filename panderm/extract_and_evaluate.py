@@ -18,6 +18,7 @@ Outputs (saved to CONFIG["output_dir"]/features/):
 """
 
 import sys
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -26,11 +27,17 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from PIL import Image
 from collections import OrderedDict
+import cv2
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     balanced_accuracy_score, accuracy_score,
     classification_report, confusion_matrix,
     roc_auc_score, cohen_kappa_score,
+    roc_curve, auc,
 )
 from sklearn.preprocessing import label_binarize
 
@@ -158,6 +165,110 @@ def load_manifest() -> pd.DataFrame:
     return manifest
 
 
+# ── Attention Maps ────────────────────────────────────────────────────────
+def get_attention_map(model: torch.nn.Module, img_path: str) -> tuple:
+    """
+    Extract CLS-token attention from the final ViT block.
+    Returns (resized_PIL_image, overlay_numpy_array).
+    """
+    vis_tf = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
+
+    pil_img    = Image.open(img_path).convert("RGB")
+    img_tensor = vis_tf(pil_img).unsqueeze(0)
+
+    attn_captured = {}
+
+    def hook_fn(module, input, output):
+        x = input[0]
+        B, N, C = x.shape
+        qkv = module.qkv(x).reshape(
+            B, N, 3, module.num_heads, C // module.num_heads
+        ).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        attn = (q @ k.transpose(-2, -1)) * module.scale
+        attn = attn.softmax(dim=-1)
+        attn_captured["weights"] = attn.detach().cpu()
+
+    handle = model.blocks[-1].attn.register_forward_hook(hook_fn)
+    with torch.no_grad():
+        model.forward_features(img_tensor.to(DEVICE), is_train=False)
+    handle.remove()
+
+    # Mean over heads, CLS token attending to patches
+    cls_attn  = attn_captured["weights"][0, :, 0, 1:]   # (heads, 196)
+    mean_attn = cls_attn.mean(dim=0)                     # (196,)
+    side      = int(np.sqrt(mean_attn.shape[0]))         # 14
+    attn_map  = mean_attn.reshape(side, side).numpy()
+    attn_map  = cv2.resize(attn_map, (224, 224), interpolation=cv2.INTER_CUBIC)
+
+    # Lesion masking — suppress black background pixels
+    resized      = np.array(pil_img.resize((224, 224)))
+    gray         = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
+    lesion_mask  = (gray > 10).astype(np.float32)
+    attn_masked  = attn_map * lesion_mask
+    lesion_vals  = attn_masked[lesion_mask == 1]
+
+    if lesion_vals.size > 0 and lesion_vals.max() > lesion_vals.min():
+        vmin, vmax = lesion_vals.min(), lesion_vals.max()
+        attn_norm  = np.clip((attn_masked - vmin) / (vmax - vmin), 0, 1)
+    else:
+        attn_norm  = attn_masked
+
+    heatmap_u8                = (attn_norm * 255).astype(np.uint8)
+    heatmap                   = cv2.applyColorMap(heatmap_u8, cv2.COLORMAP_JET)
+    heatmap[lesion_mask == 0] = 0
+    overlay                   = cv2.addWeighted(resized, 0.6, heatmap, 0.4, 0)
+
+    return pil_img.resize((224, 224)), overlay
+
+
+def generate_attention_maps(manifest: pd.DataFrame, model: torch.nn.Module,
+                             output_dir: Path, n_per_class: int = 3):
+    """
+    Save a grid of original + attention-overlay images per class.
+    """
+    import random
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    image_paths, labels = [], []
+    for cls in CLASS_NAMES:
+        subset = manifest[manifest["diagnosis"] == cls]["input_image"].tolist()
+        sample = random.sample(subset, min(n_per_class, len(subset)))
+        for p in sample:
+            image_paths.append(p)
+            labels.append(CLASS_LABELS[cls])
+
+    n      = len(image_paths)
+    fig, axes = plt.subplots(n, 2, figsize=(8, 4 * n))
+    if n == 1:
+        axes = np.array([axes])
+
+    for i, (img_path, label) in enumerate(zip(image_paths, labels)):
+        orig, overlay = get_attention_map(model, img_path)
+        true_label    = DISPLAY_NAMES[CLASS_NAMES[label]]
+
+        axes[i, 0].imshow(orig)
+        axes[i, 0].set_title(f"Original — {true_label}", fontsize=9)
+        axes[i, 0].axis("off")
+
+        axes[i, 1].imshow(overlay)
+        axes[i, 1].set_title("Attention Map", fontsize=9)
+        axes[i, 1].axis("off")
+
+        print(f"  {os.path.basename(img_path)}")
+
+    plt.suptitle("PanDerm Attention Maps (Fine-Tuned)", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    out_path = output_dir / "attention_map_examples_finetuned.png"
+    plt.savefig(str(out_path), dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {out_path}")
+
+
 # ── K-fold evaluation ─────────────────────────────────────────────────────
 def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
     fold_results = []
@@ -263,6 +374,113 @@ def save_results(fold_results, agg):
     print(f"\nSaved results to {out}")
 
 
+# ── Plots ─────────────────────────────────────────────────────────────────
+COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
+
+
+def plot_confusion_matrix(fold_results: list, output_path: Path):
+    agg_cm  = sum(r["confusion_matrix"] for r in fold_results)
+    cm_norm = agg_cm.astype(float) / (agg_cm.sum(axis=1, keepdims=True) + 1e-9)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    sns.heatmap(cm_norm, annot=False, cmap="Blues", vmin=0, vmax=1,
+                xticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES],
+                yticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES], ax=ax)
+    for i in range(agg_cm.shape[0]):
+        for j in range(agg_cm.shape[1]):
+            ax.text(j+0.5, i+0.5,
+                    f"{cm_norm[i,j]:.0%}\n(n={agg_cm[i,j]})",
+                    ha="center", va="center", fontsize=11,
+                    color="white" if cm_norm[i,j] > 0.5 else "black")
+    cbar = ax.collections[0].colorbar
+    cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+    cbar.set_ticklabels(["0%", "25%", "50%", "75%", "100%"])
+    ax.set_title("Aggregate Confusion Matrix (Row-Normalised)", fontsize=13, fontweight="bold")
+    ax.set_ylabel("True Label"); ax.set_xlabel("Predicted Label")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path.name}")
+
+
+def plot_roc_curves(fold_results: list, output_path: Path):
+    fig, ax = plt.subplots(figsize=(8, 7))
+    for ci, cls in enumerate(CLASS_NAMES):
+        all_fpr     = np.linspace(0, 1, 100)
+        tpr_interps = []
+        for r in fold_results:
+            y_bin = label_binarize(r["y_test"], classes=[0, 1, 2])
+            try:
+                fpr, tpr, _ = roc_curve(y_bin[:, ci], r["y_proba"][:, ci])
+                ti = np.interp(all_fpr, fpr, tpr); ti[0] = 0.0
+                tpr_interps.append(ti)
+            except ValueError:
+                pass
+        mean_tpr = np.mean(tpr_interps, axis=0); mean_tpr[-1] = 1.0
+        std_tpr  = np.std(tpr_interps, axis=0)
+        mean_auc = auc(all_fpr, mean_tpr)
+        ax.plot(all_fpr, mean_tpr, color=COLORS[ci], linewidth=2,
+                label=f"{DISPLAY_NAMES[cls]} (AUC={mean_auc:.3f})")
+        ax.fill_between(all_fpr, mean_tpr-std_tpr, mean_tpr+std_tpr,
+                        color=COLORS[ci], alpha=0.15)
+    ax.plot([0,1],[0,1],"k--",linewidth=1,alpha=0.5)
+    ax.set_xlabel("False Positive Rate"); ax.set_ylabel("True Positive Rate")
+    ax.set_title("Mean ROC Curves (One-vs-Rest, 5-Fold CV)", fontsize=13, fontweight="bold")
+    ax.legend(loc="lower right"); ax.grid(linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path.name}")
+
+
+def plot_fold_accuracy_bars(fold_results: list, output_path: Path):
+    folds    = [r["fold"]+1 for r in fold_results]
+    bal_accs = [r["balanced_accuracy"] for r in fold_results]
+    mean_acc = np.mean(bal_accs)
+    fig, ax  = plt.subplots(figsize=(7, 4))
+    bars = ax.bar(folds, bal_accs, color="#1976d2", alpha=0.8, edgecolor="white")
+    ax.axhline(mean_acc, color="#d32f2f", linestyle="--", linewidth=2,
+               label=f"Mean = {mean_acc:.3f}")
+    ax.axhline(0.333, color="gray", linestyle=":", linewidth=1.5,
+               alpha=0.6, label="Random baseline")
+    for bar, val in zip(bars, bal_accs):
+        ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.01,
+                f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+    ax.set_xlabel("Fold"); ax.set_ylabel("Balanced Accuracy")
+    ax.set_title("Balanced Accuracy per Fold", fontsize=13, fontweight="bold")
+    ax.set_xticks(folds); ax.set_ylim(0, 1); ax.legend()
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path.name}")
+
+
+def plot_umap(fold_results: list, output_path: Path):
+    try:
+        import umap as umap_lib
+    except ImportError:
+        print("  umap-learn not installed — skipping UMAP (pip install umap-learn)")
+        return
+    all_probs  = np.vstack([r["y_proba"] for r in fold_results])
+    all_labels = np.concatenate([r["y_test"] for r in fold_results])
+    print(f"  Fitting UMAP on {len(all_labels)} test patients...")
+    embedding = umap_lib.UMAP(n_neighbors=15, min_dist=0.1,
+                               n_components=2, random_state=42).fit_transform(all_probs)
+    fig, ax = plt.subplots(figsize=(9, 7))
+    for lv, cls in enumerate(CLASS_NAMES):
+        mask = all_labels == lv
+        ax.scatter(embedding[mask,0], embedding[mask,1],
+                   c=COLORS[lv], s=40, alpha=0.7, edgecolors="k", linewidth=0.5,
+                   label=DISPLAY_NAMES[cls])
+    ax.set_title("UMAP — Fine-Tuned PanDerm Features (5-Fold)", fontsize=13, fontweight="bold")
+    ax.set_xlabel("UMAP 1"); ax.set_ylabel("UMAP 2"); ax.legend()
+    ax.grid(linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"Saved: {output_path.name}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
 def main():
     manifest = load_manifest()
@@ -310,6 +528,28 @@ def main():
     fold_results = run_kfold_evaluation(ref_labels, ref_groups, fold_assignments)
     agg = print_summary(fold_results)
     save_results(fold_results, agg)
+
+    # Plots
+    out = Path(CONFIG["output_dir"])
+    print("\nGenerating plots...")
+    plot_confusion_matrix(fold_results,    out / "confusion_matrix_aggregate.png")
+    plot_roc_curves(fold_results,          out / "roc_curves_mean.png")
+    plot_fold_accuracy_bars(fold_results,  out / "fold_accuracy_bars.png")
+    plot_umap(fold_results,                out / "umap_patient_features.png")
+
+    # Attention maps — use fold 0 checkpoint
+    print("\nGenerating attention maps (fold 0 checkpoint)...")
+    try:
+        fold0_dir  = Path(CONFIG["output_dir"]) / "results_fold0"
+        ckpt_path  = find_best_checkpoint(fold0_dir)
+        attn_model = load_panderm_encoder(ckpt_path)
+        generate_attention_maps(manifest, attn_model,
+                                output_dir=Path(CONFIG["output_dir"]),
+                                n_per_class=3)
+        del attn_model
+        torch.cuda.empty_cache()
+    except Exception as e:
+        print(f"  Attention maps failed: {e}")
 
 
 if __name__ == "__main__":
