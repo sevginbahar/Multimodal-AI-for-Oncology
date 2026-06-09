@@ -12,10 +12,10 @@ A multimodal deep learning pipeline for melanocytic skin lesion classification c
 | PanDerm fine-tuned (image only) | 0.546 ± 0.040 | 0.699 ± 0.041 | 0.523 ± 0.047 |
 | **PanDerm + BioClinicalBERT (fusion)** | **0.603 ± 0.060** | **0.778 ± 0.057** | **0.576 ± 0.061** |
 
-> Fusion evaluated on 138/177 patients with both dermoscopy images and clinical reports.  
+> Fusion evaluated on 138/177 patients with both dermoscopy images and clinical reports.
 > All results: patient-level, 5-fold cross-validation, logistic regression classifier.
 
-**Per-class breakdown across all models:**
+**Per-class breakdown:**
 
 | Model | DN F1 | DN AUC | MIA F1 | MIA AUC | Minsitu F1 | Minsitu AUC |
 |-------|:-----:|:------:|:------:|:-------:|:----------:|:-----------:|
@@ -35,10 +35,7 @@ DN = Dysplastic Nevus · MIA = Melanoma Stage IA · Minsitu = Melanoma In Situ
 | Pathology reports | BioClinicalBERT | (N, 768) text embeddings |
 | Fusion | Logistic Regression | 3-class prediction |
 
-**Classes:**
-- Dysplastic Nevus (DN)
-- Melanoma In Situ (Minsitu)
-- Melanoma Stage IA (MIA)
+**Classes:** Dysplastic Nevus (DN) · Melanoma In Situ (Minsitu) · Melanoma Stage IA (MIA)
 
 **Dataset:** 177 melanocytic skin lesion cases with paired dermoscopy images and pathology reports.
 
@@ -74,178 +71,162 @@ Image Features (1024-dim)      Text Embeddings (768-dim)
 ## Repository Structure
 
 ```
-├── clinical/
-│   └── clinical_pipeline.py              # BioClinicalBERT embedding pipeline
+Multimodal-AI-for-Oncology/
+├── config.py                        # All paths and hyperparameters — edit this first
+├── run_pipeline.py                  # End-to-end pipeline orchestrator
 │
 ├── panderm/
-│   ├── panderm-finetuning-colab.ipynb    # Fine-tuning notebook (Google Colab)
-│   ├── panderm_finetuning.py             # Fine-tuning script
-│   ├── extract_and_evaluate.py           # Feature extraction + k-fold evaluation
-│   ├── prepare_data.py                   # Dataset manifest + fold splits
-│   ├── make_panderm_csv.py               # Create PanDerm-format CSVs
-│   ├── segment_lesions.py                # Lesion segmentation (preprocessing)
-│   └── config.py                         # Shared constants
+│   ├── prepare_data.py              # Scan dataset, create manifest + k-fold splits
+│   ├── segment_lesions.py           # Lesion segmentation (LAB + Otsu + morphological closing)
+│   ├── make_panderm_csv.py          # Convert manifest to PanDerm-format fold CSVs
+│   ├── panderm_finetuning.py        # Fine-tune PanDerm (5-fold, calls PanDerm repo)
+│   ├── extract_features.py          # Extract CLS token features — requires GPU
+│   └── evaluate.py                  # Logistic regression + plots + attention maps — CPU only
 │
-├── fusion/
-│   ├── late_fusion_colab.ipynb           # Fusion notebook (Google Colab)
-│   └── late_fusion.py                    # Fusion script
+├── clinical/
+│   └── clinical_pipeline.py         # BioClinicalBERT embeddings from pathology reports
 │
-├── clinical-biobert-pipeline.ipynb       # Clinical pipeline (Kaggle notebook)
-└── README.md
+└── fusion/
+    └── late_fusion.py               # Late fusion: image + text → logistic regression
 ```
 
 ---
 
-## GPU Requirements
+## Quickstart
 
-| Step | Script | Recommended GPU | Approximate Time |
-|------|--------|----------------|-----------------|
-| PanDerm fine-tuning (per fold) | `panderm_finetuning.py` | NVIDIA T4 (16 GB) or better | ~30–60 min/fold |
-| PanDerm fine-tuning (5 folds total) | `panderm_finetuning.py` | NVIDIA T4 (16 GB) or better | ~3–5 hours |
-| Feature extraction (per fold) | `extract_and_evaluate.py` | NVIDIA T4 (16 GB) | ~5 min/fold |
-| BioClinicalBERT embeddings | `clinical_pipeline.py` | CPU or any GPU | ~2–5 min |
-| Late fusion evaluation | `late_fusion.py` | CPU (no GPU needed) | < 1 min |
+### 1. Setup
 
-**Free-tier options:**
-- **Google Colab T4** — used for this project. ~3–4 hours compute per session, resets after ~24 hours.
-- **Kaggle T4** — used for clinical pipeline. 30 GPU hours/week free.
-
-> Note: Feature extraction caches results to disk, so GPU is only needed once per fold.
-
----
-
-## 1. Clinical Text Pipeline
-
-Extracts dense semantic embeddings from pathology reports using **BioClinicalBERT** (`emilyalsentzer/Bio_ClinicalBERT`), trained on MIMIC-III clinical notes.
-
-**Steps:**
-1. Load pathology reports (diagnosis + macroscopic description)
-2. Encode with BioClinicalBERT (mean pooling over tokens, max 512 tokens)
-3. Validate with UMAP, cosine similarity, k-NN LOO accuracy
-4. Save `clinical_embeddings.npy` (177, 768)
-
-**Run:**
 ```bash
-python clinical/clinical_pipeline.py
+# Clone this repo
+git clone <this-repo>
+cd Multimodal-AI-for-Oncology
+
+# Clone PanDerm
+git clone https://github.com/SiyuanYan1/PanDerm.git
+
+# Install dependencies
+pip install timm==0.9.16 "numpy<2.0" torch torchvision
+pip install transformers scikit-learn umap-learn wandb
+pip install opencv-python matplotlib seaborn pandas tqdm
 ```
 
-**Requirements:**
+### 2. Configure paths
+
+Edit **`config.py`** — this is the only file you need to change:
+
+```python
+DATA_ROOT        = Path("/path/to/dermoscopy")           # raw images, one folder per class
+PANDERM_REPO     = Path("/path/to/PanDerm")              # cloned PanDerm repo
+CHECKPOINT_LARGE = Path("/path/to/panderm_ll_data6_checkpoint-499.pth")
+PIPELINE_DIR     = Path("/path/to/improved_pipeline")    # outputs go here
+```
+
+### 3. Run the pipeline
+
 ```bash
-pip install transformers torch openpyxl umap-learn scikit-learn tqdm
+# Full pipeline (with fine-tuning)
+python run_pipeline.py --stage all
+
+# Full pipeline (pretrained features only — no fine-tuning)
+python run_pipeline.py --stage all --no-finetune
+
+# Resume from a specific stage
+python run_pipeline.py --stage all --skip-existing
+
+# Individual stages
+python run_pipeline.py --stage prepare
+python run_pipeline.py --stage segment
+python run_pipeline.py --stage make_csv
+python run_pipeline.py --stage finetune
+python run_pipeline.py --stage extract_features   # GPU job
+python run_pipeline.py --stage evaluate           # CPU job
+python run_pipeline.py --stage clinical_modality
+python run_pipeline.py --stage fusion
 ```
 
 ---
 
-## 2. PanDerm Fine-Tuning
+## Stage Details
 
-Fine-tunes **PanDerm Large ViT** ([SiyuanYan1/PanDerm](https://github.com/SiyuanYan1/PanDerm)) on dermoscopy images using 5-fold cross-validation with patient-level stratified splits.
+### 1. `prepare_data.py`
+Scans the dermoscopy dataset, creates `dataset_manifest.csv` with patient-level stratified 5-fold splits (StratifiedGroupKFold, no patient leakage across folds).
 
-**Training configuration:**
+**Output:** `results/dataset_manifest.csv`
+
+### 2. `segment_lesions.py`
+Segments lesions from the background using LAB colour space + Otsu thresholding + morphological closing. Crops to the lesion bounding box with a 10% margin. Falls back to the full image if the mask is too small.
+
+**Output:** `segmented_cache/` + updated `segmented_path` column in manifest
+
+### 3. `make_panderm_csv.py`
+Converts the manifest into 5 fold CSVs with `image`, `label`, `split` columns in the format expected by PanDerm's `run_class_finetuning.py`.
+
+**Output:** `cross-fold-csv/panderm_finetuning_fold{0-4}.csv`
+
+### 4. `panderm_finetuning.py`
+Fine-tunes PanDerm Large (ViT-L/16) on the segmented images for each fold.
 
 | Parameter | Value |
 |-----------|-------|
 | Model | PanDerm Large (ViT-L/16) |
-| Feature dimension | 1024 |
-| Pretrained checkpoint | panderm_ll_data6_checkpoint-499.pth |
-| Epochs | 50 |
-| Warmup epochs | 5 |
+| Epochs | 50 (warmup: 5) |
 | Batch size | 32 |
 | Layer decay | 0.65 |
 | Drop path | 0.2 |
-| Weight decay | 0.05 |
 | Mixup / CutMix | 0.8 / 1.0 |
 | Optimizer | AdamW |
-| Classes | 3 |
 
-**Run on Google Colab (recommended):**
-1. Clone PanDerm repo: `git clone https://github.com/SiyuanYan1/PanDerm.git`
-2. Open `panderm/panderm-finetuning-colab.ipynb`
-3. Mount Google Drive and add `WANDB_API_KEY` to Colab Secrets
-4. Edit `DRIVE_ROOT` in Cell 5 to match your Drive layout
-5. Run cells sequentially: 1 → 2 → restart → 3 → 4 → 5 → 6 → 6b → 7 → 8 → 9
+**Output:** `results/results_fold{0-4}/checkpoint-best.pth`
 
-**Run as script:**
-```bash
-# Edit CONFIG paths at top of file first
-python panderm/panderm_finetuning.py
-```
+### 5. `extract_features.py` — GPU required
+Loads each fold's fine-tuned checkpoint, extracts 1024-dim CLS token features, and aggregates to patient level by mean pooling across images.
 
-**Requirements:**
-```bash
-pip install timm==0.9.16 "numpy<2.0" wandb open_clip_torch
-pip install torch torchvision scikit-learn umap-learn
-```
+**Output:** `features/fold{i}_image_features.npy`, `features/patient_features_fold{i}.npy`
 
----
-
-## 3. Feature Extraction + Evaluation
-
-Loads each fold's fine-tuned checkpoint, extracts CLS token features, aggregates to patient level, and evaluates with logistic regression.
-
-**Run:**
-```bash
-# Edit CONFIG paths at top of file first
-python panderm/extract_and_evaluate.py
-```
-
-**Key design decisions:**
-- Each fold uses its **own fine-tuned checkpoint** — no data leakage (test images never seen during that fold's training)
-- Uses **segmented lesion images** for feature extraction (consistent with baseline)
-- **Mean pooling** across images per patient group → one 1024-dim vector per patient
-- 3 patients appear in two classes → 166 patient groups from 163 unique patients
+### 6. `evaluate.py` — CPU only
+Reads saved features, runs logistic regression k-fold evaluation, and generates all plots.
 
 **Outputs:**
 ```
-results/features/
-    fold{i}_image_features.npy        (562, 1024)
-    patient_features_fold{i}.npy      (166, 1024)
-    patient_labels.npy
-    patient_group_ids.npy
-    group_fold_mapping.csv
 results/
     kfold_results_finetuned.csv
     fold_{i}_report.txt
     confusion_matrix_aggregate.png
     roc_curves_mean.png
     fold_accuracy_bars.png
+    umap_patient_features.png
+    attention_map_examples_finetuned.png
 ```
+
+### 7. `clinical_pipeline.py`
+Encodes pathology reports with BioClinicalBERT (`emilyalsentzer/Bio_ClinicalBERT`), mean-pooled over tokens.
+
+**Output:** `clinical_outputs/clinical_embeddings.npy` (N, 768)
+
+### 8. `late_fusion.py`
+Concatenates image features (1024-dim) and text embeddings (768-dim) → 1792-dim, then evaluates with logistic regression.
+
+**Output:** `fusion_results/fusion_kfold_results.csv`, fusion plots
 
 ---
 
-## 4. Late Fusion
+## GPU Requirements
 
-Concatenates PanDerm image features and BioClinicalBERT text embeddings and evaluates with logistic regression.
-
-**Run:**
-```bash
-# Edit CONFIG paths at top of file first
-python fusion/late_fusion.py
-```
-
-**How it works:**
-```python
-# For each fold:
-img_feats  = patient_features_fold{i}.npy   # (138, 1024)
-text_feats = clinical_embeddings.npy         # (138,  768)
-fused      = concatenate([img_feats, text_feats], axis=1)  # (138, 1792)
-# Train logistic regression on train split, evaluate on test split
-```
-
-**Outputs:**
-```
-fusion_results/
-    fusion_kfold_results.csv
-    fusion_confusion_matrix.png
-    fusion_roc_curves.png
-    fusion_umap.png
-```
+| Stage | Script | GPU | Approximate Time |
+|-------|--------|-----|-----------------|
+| Fine-tuning (per fold) | `panderm_finetuning.py` | Required (≥16 GB) | ~30–60 min/fold |
+| Fine-tuning (5 folds) | `panderm_finetuning.py` | Required (≥16 GB) | ~3–5 hours |
+| Feature extraction | `extract_features.py` | Required | ~5 min/fold |
+| Evaluation + plots | `evaluate.py` | Not needed | < 1 min |
+| Clinical embeddings | `clinical_pipeline.py` | Optional | ~2–5 min |
+| Late fusion | `late_fusion.py` | Not needed | < 1 min |
 
 ---
 
 ## Data
 
 - **177** melanocytic skin lesion cases
-- **3 classes:** DN, MIA, Melanoma In Situ
+- **3 classes:** Dysplastic Nevus (DN), Melanoma Stage IA (MIA), Melanoma In Situ (Minsitu)
 - Paired dermoscopy images + pathology reports
 - Reports in English, Spanish, and Catalan (translated to English)
 - 5-fold cross-validation splits (patient-level, no data leakage)
@@ -265,6 +246,7 @@ fusion_results/
 | umap-learn | 0.5+ |
 | wandb | latest |
 | numpy | < 2.0 |
+| opencv-python | 4.x |
 
 ---
 
@@ -285,6 +267,6 @@ If you use PanDerm, please cite:
 
 ## Author
 
-**Bahar Sevgin**  
-Queen Mary University of London  
+**Bahar Sevgin**
+Queen Mary University of London
 Research Assistant — Maiques Lab

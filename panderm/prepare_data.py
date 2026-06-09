@@ -5,10 +5,13 @@ patient-level stratified k-fold splits.
 Usage:
     python prepare_data.py
 """
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from sklearn.model_selection import StratifiedGroupKFold
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
     DATA_ROOT, OUTPUT_DIR, CLASS_NAMES, CLASS_LABELS,
     IMAGE_EXTENSIONS, N_FOLDS, RANDOM_SEED,

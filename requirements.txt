@@ -1,0 +1,32 @@
+# Core
+numpy<2.0
+pandas
+torch
+torchvision
+Pillow
+
+# PanDerm — must be exactly 0.9.16
+timm==0.9.16
+
+# Transformers (BioClinicalBERT)
+transformers
+
+# Computer vision
+opencv-python
+scikit-image
+scipy
+
+# Machine learning
+scikit-learn
+
+# Visualisation
+matplotlib
+seaborn
+umap-learn
+
+# Experiment tracking
+wandb
+
+# Utilities
+tqdm
+openpyxl

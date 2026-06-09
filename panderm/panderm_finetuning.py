@@ -7,7 +7,7 @@ using patient-level stratified 5-fold cross-validation.
 Usage:
     python panderm_finetuning.py
 
-Outputs (per fold, saved to CONFIG["output_dir"]/results_fold{i}/):
+Outputs (per fold, saved to OUTPUT_DIR/results_fold{i}/):
     checkpoint-best.pth   — best model checkpoint
     test.csv              — per-image predictions
 
@@ -22,36 +22,29 @@ import subprocess
 import sys
 from pathlib import Path
 
-# ── Config ────────────────────────────────────────────────────────────────
-CONFIG = {
-    "panderm_repo":    "/path/to/PanDerm/classification",
-    "checkpoint":      "/path/to/panderm_ll_data6_checkpoint-499.pth",
-    "csv_dir":         "/path/to/cross-fold-csv",
-    "image_root":      "/path/to/dermoscopy",
-    "segmented_cache": "/path/to/segmented_cache",
-    "manifest":        "/path/to/dataset_manifest.csv",
-    "output_dir":      "./results",
-    "model":           "PanDerm_Large_FT",
-    "nb_classes":      3,
-    "batch_size":      32,
-    "epochs":          50,
-    "warmup_epochs":   5,
-    "layer_decay":     0.65,
-    "drop_path":       0.2,
-    "weight_decay":    0.05,
-    "mixup":           0.8,
-    "cutmix":          1.0,
-    "num_workers":     4,
-    "n_folds":         5,
-}
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import (
+    PANDERM_CLASS, CHECKPOINT_LARGE,
+    CSV_DIR, DATA_ROOT, SEGMENTED_DIR, OUTPUT_DIR,
+    NB_CLASSES, BATCH_SIZE, NUM_WORKERS, N_FOLDS,
+)
 
-CSV_PATHS = {i: str(Path(CONFIG["csv_dir"]) / f"panderm_finetuning_fold{i}.csv")
-             for i in range(CONFIG["n_folds"])}
+# ── Fine-tuning hyperparameters ───────────────────────────────────────────
+MODEL         = "PanDerm_Large_FT"
+EPOCHS        = 50
+WARMUP_EPOCHS = 5
+LAYER_DECAY   = 0.65
+DROP_PATH     = 0.2
+WEIGHT_DECAY  = 0.05
+MIXUP         = 0.8
+CUTMIX        = 1.0
+
+CSV_PATHS = {i: str(CSV_DIR / f"panderm_finetuning_fold{i}.csv") for i in range(N_FOLDS)}
 
 
 # ── Patch PanDerm for PyTorch 2.x ────────────────────────────────────────
 def patch_weights_only():
-    script = Path(CONFIG["panderm_repo"]) / "run_class_finetuning.py"
+    script = PANDERM_CLASS / "run_class_finetuning.py"
     result = subprocess.run(
         ["sed", "-i",
          "s/torch.load(checkpoint_path)/torch.load(checkpoint_path, weights_only=False)/g",
@@ -68,10 +61,10 @@ def patch_weights_only():
 # ── Fine-tune all folds ───────────────────────────────────────────────────
 def run_finetuning(folds_to_run=None):
     if folds_to_run is None:
-        folds_to_run = list(range(CONFIG["n_folds"]))
+        folds_to_run = list(range(N_FOLDS))
 
     for fold in folds_to_run:
-        out_dir = Path(CONFIG["output_dir"]) / f"results_fold{fold}"
+        out_dir = OUTPUT_DIR / f"results_fold{fold}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if (out_dir / "test.csv").exists():
@@ -80,28 +73,28 @@ def run_finetuning(folds_to_run=None):
 
         cmd = [
             "python", "run_class_finetuning.py",
-            "--model",                CONFIG["model"],
-            "--pretrained_checkpoint", CONFIG["checkpoint"],
-            "--nb_classes",           str(CONFIG["nb_classes"]),
-            "--batch_size",           str(CONFIG["batch_size"]),
-            "--epochs",               str(CONFIG["epochs"]),
-            "--layer_decay",          str(CONFIG["layer_decay"]),
-            "--drop_path",            str(CONFIG["drop_path"]),
-            "--weight_decay",         str(CONFIG["weight_decay"]),
-            "--mixup",                str(CONFIG["mixup"]),
-            "--cutmix",               str(CONFIG["cutmix"]),
-            "--warmup_epochs",        str(CONFIG["warmup_epochs"]),
-            "--num_workers",          str(CONFIG["num_workers"]),
+            "--model",                 MODEL,
+            "--pretrained_checkpoint", str(CHECKPOINT_LARGE),
+            "--nb_classes",            str(NB_CLASSES),
+            "--batch_size",            str(BATCH_SIZE),
+            "--epochs",                str(EPOCHS),
+            "--layer_decay",           str(LAYER_DECAY),
+            "--drop_path",             str(DROP_PATH),
+            "--weight_decay",          str(WEIGHT_DECAY),
+            "--mixup",                 str(MIXUP),
+            "--cutmix",                str(CUTMIX),
+            "--warmup_epochs",         str(WARMUP_EPOCHS),
+            "--num_workers",           str(NUM_WORKERS),
             "--no_auto_resume",
             "--weights", "--sin_pos_emb",
-            "--wandb_name",           f"PanDerm_FT_fold{fold}",
-            "--csv_path",             CSV_PATHS[fold],
-            "--root_path",            "",
-            "--output_dir",           str(out_dir),
+            "--wandb_name",            f"PanDerm_FT_fold{fold}",
+            "--csv_path",              CSV_PATHS[fold],
+            "--root_path",             "",
+            "--output_dir",            str(out_dir),
         ]
 
         print(f"\n{'='*60}\nStarting fold {fold} ...\n{'='*60}")
-        result = subprocess.run(cmd, cwd=CONFIG["panderm_repo"])
+        result = subprocess.run(cmd, cwd=str(PANDERM_CLASS))
 
         if result.returncode == 0:
             print(f"\nFold {fold} complete")

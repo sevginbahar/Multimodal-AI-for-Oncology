@@ -11,6 +11,7 @@ LesionSegmenter.
 Usage:
     python segment_lesions.py
 """
+import sys
 import cv2
 import numpy as np
 import pandas as pd
@@ -19,6 +20,8 @@ from PIL import Image
 from scipy import ndimage
 from skimage.measure import label as sk_label
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
     OUTPUT_DIR, SEGMENTED_DIR, IMAGE_SIZE,
     MORPH_KERNEL_SIZE, MIN_LESION_RATIO, CROP_MARGIN,

@@ -19,10 +19,16 @@ Usage:
     python make_panderm_csv.py --test-fold 0 --val-fold 1
     python make_panderm_csv.py --use-segmented   # use segmented image paths
 """
+import sys
 import argparse
 import pandas as pd
 from pathlib import Path
-from config import OUTPUT_DIR, SEGMENTED_DIR, DATA_ROOT
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import (
+    OUTPUT_DIR, SEGMENTED_DIR, DATA_ROOT,
+    CSV_DIR, N_FOLDS,
+)
 
 
 def main():
@@ -90,7 +96,6 @@ def main():
     print(f'      --csv_path "{out_path}" \\')
     print(f'      --root_path "" \\')
     print(f"      --nb_classes 3 \\")
-    print(f"      ... (see STUDENT_GUIDE.md section 8.2 for full args)")
 
 
 if __name__ == "__main__":
