@@ -11,7 +11,7 @@ Evaluated on 138/177 patients with both image and clinical text data.
 Usage:
     python late_fusion.py
 
-Outputs (saved to CONFIG["output_dir"]):
+Outputs (saved to OUTPUT_DIR/fusion_results/):
     fusion_kfold_results.csv        — aggregate results
     fold_{i}_report.txt             — per-fold classification reports
     fusion_confusion_matrix.png     — aggregate confusion matrix
@@ -24,6 +24,7 @@ Results:
     Macro F1          : 0.576 +/- 0.061
 """
 
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -40,28 +41,24 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import label_binarize
 
-# ── Config ────────────────────────────────────────────────────────────────
-CONFIG = {
-    "panderm_results_dir": "./results",
-    "clinical_embeddings": "/path/to/clinical_embeddings.npy",
-    "clinical_reports":    "/path/to/full_reports.csv",
-    "output_dir":          "./fusion_results",
-    "n_folds":             5,
-}
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import (
+    OUTPUT_DIR, FEATURES_DIR, CLINICAL_DIR,
+    CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
+    N_FOLDS, LOGREG_C, LOGREG_MAX_ITER,
+)
 
-CLASS_NAMES   = ["DN", "MIA", "Minsitu"]
-DISPLAY_NAMES = {"DN": "Dysplastic Nevus", "MIA": "Melanoma Stage IA", "Minsitu": "Melanoma In Situ"}
-COLORS        = ["#1565c0", "#d32f2f", "#6a1b9a"]
-FEATURES_DIR  = Path(CONFIG["panderm_results_dir"]) / "features"
-OUT           = Path(CONFIG["output_dir"])
+# ── Config ────────────────────────────────────────────────────────────────
+COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
+OUT    = OUTPUT_DIR / "fusion_results"
 OUT.mkdir(parents=True, exist_ok=True)
 
 
 # ── Load and align modalities ─────────────────────────────────────────────
 def load_and_align():
     # Clinical embeddings
-    clin_emb = np.load(CONFIG["clinical_embeddings"])          # (177, 768)
-    clin_df  = pd.read_csv(CONFIG["clinical_reports"])
+    clin_emb = np.load(str(CLINICAL_DIR / "clinical_embeddings.npy"))          # (177, 768)
+    clin_df  = pd.read_csv(str(CLINICAL_DIR / "full_reports.csv"))
     clin_df["patient_id"] = clin_df["clinical_history_number"].astype(str)
     clin_df["clin_idx"]   = range(len(clin_df))
     print(f"Clinical embeddings : {clin_emb.shape}")
@@ -94,10 +91,10 @@ def load_and_align():
 # ── Build fused features ──────────────────────────────────────────────────
 def build_fused_features(merged, clin_emb):
     fused_features = {}
-    for fold_idx in range(CONFIG["n_folds"]):
+    for fold_idx in range(N_FOLDS):
         feat_path = FEATURES_DIR / f"patient_features_fold{fold_idx}.npy"
         if not feat_path.exists():
-            print(f"Fold {fold_idx}: image features missing — run extract_and_evaluate.py first")
+            print(f"Fold {fold_idx}: image features missing — run extract_features.py first")
             continue
         all_img = np.load(str(feat_path))                           # (166, 1024)
         img_f   = all_img[merged["img_idx"].values]                  # (138, 1024)
@@ -114,7 +111,7 @@ def run_kfold_evaluation(fused_features, merged):
     fold_assign_m = merged["fold"].values
     fold_results  = []
 
-    for fold_idx in range(CONFIG["n_folds"]):
+    for fold_idx in range(N_FOLDS):
         if fold_idx not in fused_features:
             continue
         fused      = fused_features[fold_idx]
@@ -123,7 +120,7 @@ def run_kfold_evaluation(fused_features, merged):
         X_tr, y_tr = fused[train_mask], labels[train_mask]
         X_te, y_te = fused[test_mask],  labels[test_mask]
 
-        clf = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced",
+        clf = LogisticRegression(C=LOGREG_C, max_iter=LOGREG_MAX_ITER, class_weight="balanced",
                                  solver="lbfgs", random_state=42, multi_class="multinomial")
         clf.fit(X_tr, y_tr)
         y_pred  = clf.predict(X_te)
@@ -286,7 +283,7 @@ def main():
     merged, clin_emb = load_and_align()
     fused_features   = build_fused_features(merged, clin_emb)
 
-    print(f"\nRunning {CONFIG['n_folds']}-fold logistic regression ...")
+    print(f"\nRunning {N_FOLDS}-fold logistic regression ...")
     fold_results     = run_kfold_evaluation(fused_features, merged)
     agg, agg_cm      = aggregate_and_print(fold_results)
     save_results(fold_results)

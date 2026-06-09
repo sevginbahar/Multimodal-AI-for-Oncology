@@ -13,6 +13,7 @@ Outputs:
     umap_embeddings.png                   — UMAP validation plot
 """
 
+import sys
 import re
 import numpy as np
 import pandas as pd
@@ -26,9 +27,15 @@ from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics.pairwise import cosine_similarity
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import (
+    DATA_ROOT, CLINICAL_DIR,
+    CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
+)
+
 # ── Config ────────────────────────────────────────────────────────────────
 CONFIG = {
-    "input_path":       "/path/to/your/input",
+    "input_path":       str(DATA_ROOT.parent / "clinical_data.xlsx"),
     "patient_id_col":   "clinical_history_number",
     "text_cols": {
         "diagnosis":    "diagnostic_summary_english",
@@ -38,7 +45,7 @@ CONFIG = {
     "embedding_model":  "emilyalsentzer/Bio_ClinicalBERT",
     "max_token_length": 512,
     "batch_size":       16,
-    "output_dir":       "./outputs",
+    "output_dir":       str(CLINICAL_DIR),
 }
 
 REGEX_FLAGS = {
