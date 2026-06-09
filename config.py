@@ -7,19 +7,19 @@ from pathlib import Path
 # ============================================================
 # Paths
 # ============================================================
-DATA_ROOT     = Path("/data/home/ha241003/Maiques-Lab/dermoscopy")
-PANDERM_REPO  = Path("/data/home/ha241003/Maiques-Lab/PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
+DATA_ROOT     = Path("/data/home/Maiques-Lab/dermoscopy")
+PANDERM_REPO  = Path("/data/home/Maiques-Lab/PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
 PANDERM_CLASS = PANDERM_REPO / "classification"
 
-CHECKPOINT_LARGE = Path("/data/home/ha241003/Maiques-Lab/panderm_ll_data6_checkpoint-499.pth")
-CHECKPOINT_BASE  = Path("/data/home/ha241003/Maiques-Lab/panderm_bb_data6_checkpoint-499.pth")
+CHECKPOINT_LARGE = Path("/data/home/Maiques-Lab/panderm_ll_data6_checkpoint-499.pth")
+CHECKPOINT_BASE  = Path("/data/home/Maiques-Lab/panderm_bb_data6_checkpoint-499.pth")
 
-PIPELINE_DIR  = Path("/data/home/ha241003/Maiques-Lab/improved_pipeline")
+PIPELINE_DIR  = Path("/data/home/Maiques-Lab/panderm")
 OUTPUT_DIR    = PIPELINE_DIR / "results"
 SEGMENTED_DIR = PIPELINE_DIR / "segmented_cache"
 FEATURES_DIR  = PIPELINE_DIR / "features"
 CSV_DIR       = PIPELINE_DIR / "cross-fold-csv"
-CLINICAL_DIR  = Path("/data/home/ha241003/Maiques-Lab/clinical_outputs")
+CLINICAL_DIR  = Path("/data/home/Maiques-Lab/clinical_outputs")
 
 # ============================================================
 # Class definitions
