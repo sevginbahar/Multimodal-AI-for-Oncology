@@ -25,6 +25,7 @@ Results:
 """
 
 import sys
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -44,14 +45,32 @@ from sklearn.preprocessing import label_binarize
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
     OUTPUT_DIR, FEATURES_DIR, CLINICAL_DIR,
+    PIPELINE_DIR,
     CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
     N_FOLDS, LOGREG_C, LOGREG_MAX_ITER,
 )
 
-# ── Config ────────────────────────────────────────────────────────────────
+# ── Parse mode ────────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune",
+                    help="Which PanDerm features to fuse: finetune (default) or frozen")
+args, _ = parser.parse_known_args()
+
+if args.mode == "frozen":
+    _IMG_FEATURES_DIR = PIPELINE_DIR / "non_fine_tune_results" / "features"
+    _IMG_OUTPUT_DIR   = PIPELINE_DIR / "non_fine_tune_results"
+    _MODE_LABEL       = "Frozen PanDerm + BioClinicalBERT"
+else:
+    _IMG_FEATURES_DIR = FEATURES_DIR
+    _IMG_OUTPUT_DIR   = OUTPUT_DIR
+    _MODE_LABEL       = "Fine-Tuned PanDerm + BioClinicalBERT"
+
 COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
-OUT    = OUTPUT_DIR / "fusion_results"
+OUT    = _IMG_OUTPUT_DIR / "fusion_results"
 OUT.mkdir(parents=True, exist_ok=True)
+print(f"Mode: {_MODE_LABEL}")
+print(f"Image features : {_IMG_FEATURES_DIR}")
+print(f"Output dir     : {OUT}")
 
 
 # ── Load and align modalities ─────────────────────────────────────────────
@@ -64,9 +83,9 @@ def load_and_align():
     print(f"Clinical embeddings : {clin_emb.shape}")
 
     # Image patient metadata
-    group_ids  = list(np.load(str(FEATURES_DIR / "patient_group_ids.npy"), allow_pickle=True))
-    img_labels = np.load(str(FEATURES_DIR / "patient_labels.npy"))
-    fold_df    = pd.read_csv(FEATURES_DIR / "group_fold_mapping.csv")
+    group_ids  = list(np.load(str(_IMG_FEATURES_DIR / "patient_group_ids.npy"), allow_pickle=True))
+    img_labels = np.load(str(_IMG_FEATURES_DIR / "patient_labels.npy"))
+    fold_df    = pd.read_csv(_IMG_FEATURES_DIR / "group_fold_mapping.csv")
     fold_assign = dict(zip(fold_df["group_id"], fold_df["fold"]))
 
     img_df = pd.DataFrame({
@@ -92,7 +111,7 @@ def load_and_align():
 def build_fused_features(merged, clin_emb):
     fused_features = {}
     for fold_idx in range(N_FOLDS):
-        feat_path = FEATURES_DIR / f"patient_features_fold{fold_idx}.npy"
+        feat_path = _IMG_FEATURES_DIR / f"patient_features_fold{fold_idx}.npy"
         if not feat_path.exists():
             print(f"Fold {fold_idx}: image features missing — run extract_features.py first")
             continue
@@ -178,7 +197,7 @@ def aggregate_and_print(fold_results):
     agg_cm = sum(r["confusion_matrix"] for r in fold_results)
 
     print("\n" + "="*70)
-    print("RESULTS -- Late Fusion: PanDerm + BioClinicalBERT (5-Fold CV)")
+    print(f"RESULTS -- Late Fusion: {_MODE_LABEL} (5-Fold CV)")
     print("="*70)
     print(f"  Balanced Accuracy : {agg['balanced_accuracy_mean']:.3f} +/- {agg['balanced_accuracy_std']:.3f}")
     print(f"  Accuracy          : {agg['accuracy_mean']:.3f} +/- {agg['accuracy_std']:.3f}")

@@ -215,11 +215,13 @@ def stage_finetune():
 
 def stage_extract_features(use_finetuned: bool = True):
     """Extract CLS features using PanDerm and save to disk (GPU required)."""
-    sys.path.insert(0, str(PIPELINE_DIR / "panderm"))
-    import extract_features as ef
-    ef.FEATURES_DIR = FEATURES_DIR / ("finetuned" if use_finetuned else "pretrained")
-    ef.FEATURES_DIR.mkdir(parents=True, exist_ok=True)
-    ef.main()
+    script = PIPELINE_DIR / "panderm" / "extract_features.py"
+    if not script.exists():
+        raise FileNotFoundError(f"Extract features script not found: {script}")
+    mode = "finetune" if use_finetuned else "frozen"
+    cmd  = [sys.executable, str(script), "--mode", mode]
+    print(f"Running: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 
 def stage_evaluate():
@@ -235,35 +237,22 @@ def stage_clinical_modality():
     if not script.exists():
         raise FileNotFoundError(f"Clinical pipeline script not found: {script}")
 
-    cmd = [
-        sys.executable, str(script),
-        "--output_dir", str(CLINICAL_DIR),
-    ]
+    cmd = [sys.executable, str(script)]
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     print(f"\nEmbeddings saved to: {CLINICAL_DIR}")
 
 
-def stage_fusion():
+def stage_fusion(use_finetuned: bool = True):
     """Late fusion: concatenate image + clinical text features → logistic regression."""
     script = PIPELINE_DIR / "fusion" / "late_fusion.py"
     if not script.exists():
         raise FileNotFoundError(f"Fusion script not found: {script}")
 
-    # Use fine-tuned features if available, otherwise fall back to pretrained
-    finetuned_dir  = OUTPUT_DIR / "features_finetuned"
-    pretrained_dir = OUTPUT_DIR / "features_pretrained"
-    features_dir   = finetuned_dir if finetuned_dir.exists() else pretrained_dir
-
-    cmd = [
-        sys.executable, str(script),
-        "--image_features_dir",  str(features_dir),
-        "--clinical_embeddings", str(CLINICAL_DIR / "clinical_embeddings.npy"),
-        "--output_dir",          str(OUTPUT_DIR / "fusion_results"),
-    ]
+    mode = "finetune" if use_finetuned else "frozen"
+    cmd  = [sys.executable, str(script), "--mode", mode]
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
-    print(f"\nFusion results saved to: {OUTPUT_DIR / 'fusion_results'}")
 
 
 # ── Stage registry ────────────────────────────────────────────────────────
@@ -341,9 +330,10 @@ def main():
     for stage_name in to_run:
         func, skip_check = stage_map[stage_name]
 
-        # Pass use_finetuned flag into extract_features
         if stage_name == "extract_features":
             bound_func = lambda f=use_finetuned: stage_extract_features(use_finetuned=f)
+        elif stage_name == "fusion":
+            bound_func = lambda f=use_finetuned: stage_fusion(use_finetuned=f)
         else:
             bound_func = func
 

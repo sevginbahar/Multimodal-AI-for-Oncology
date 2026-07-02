@@ -23,6 +23,7 @@ import sys
 import os
 import numpy as np
 import pandas as pd
+from scipy import stats
 import torch
 import torchvision.transforms as transforms
 from pathlib import Path
@@ -120,6 +121,13 @@ def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
     return fold_results
 
 
+def _ci95(vals):
+    vals = np.array(vals)
+    lo, hi = stats.t.interval(0.95, df=len(vals)-1,
+                               loc=np.nanmean(vals), scale=stats.sem(vals, nan_policy="omit"))
+    return lo, hi
+
+
 def print_summary(fold_results):
     scalar_metrics = ["balanced_accuracy", "accuracy", "macro_auc", "cohen_kappa", "macro_f1"]
     agg = {}
@@ -127,27 +135,34 @@ def print_summary(fold_results):
         vals = [r[m] for r in fold_results]
         agg[f"{m}_mean"] = np.nanmean(vals)
         agg[f"{m}_std"]  = np.nanstd(vals)
+        agg[f"{m}_ci"]   = _ci95(vals)
     for cls in CLASS_NAMES:
         for mt in ["f1", "precision", "recall", "auc"]:
             vals = [r[f"per_class_{mt}"][cls] for r in fold_results]
             agg[f"{cls}_{mt}_mean"] = np.nanmean(vals)
             agg[f"{cls}_{mt}_std"]  = np.nanstd(vals)
+            agg[f"{cls}_{mt}_ci"]   = _ci95(vals)
 
-    print("\n" + "="*70)
+    print("\n" + "="*75)
     print("RESULTS — Fine-Tuned PanDerm (Patient-Level, 5-Fold CV)")
-    print("="*70)
-    print(f"  Balanced Accuracy : {agg['balanced_accuracy_mean']:.3f} ± {agg['balanced_accuracy_std']:.3f}")
-    print(f"  Accuracy          : {agg['accuracy_mean']:.3f} ± {agg['accuracy_std']:.3f}")
-    print(f"  Macro AUC         : {agg['macro_auc_mean']:.3f} ± {agg['macro_auc_std']:.3f}")
-    print(f"  Macro F1          : {agg['macro_f1_mean']:.3f} ± {agg['macro_f1_std']:.3f}")
-    print(f"  Cohen Kappa       : {agg['cohen_kappa_mean']:.3f} ± {agg['cohen_kappa_std']:.3f}")
-    print(f"\n  {'Class':<22} {'F1':>14} {'AUC':>14}")
-    print("  " + "-"*50)
+    print("="*75)
+    for label, key in [("Balanced Accuracy", "balanced_accuracy"),
+                        ("Accuracy",          "accuracy"),
+                        ("Macro AUC",         "macro_auc"),
+                        ("Macro F1",          "macro_f1"),
+                        ("Cohen Kappa",       "cohen_kappa")]:
+        lo, hi = agg[f"{key}_ci"]
+        print(f"  {label:<20}: {agg[f'{key}_mean']:.3f} ± {agg[f'{key}_std']:.3f}"
+              f"  (95% CI {lo:.3f}–{hi:.3f})")
+    print(f"\n  {'Class':<22} {'F1 (95% CI)':>26} {'AUC (95% CI)':>26}")
+    print("  " + "-"*76)
     for cls in CLASS_NAMES:
-        f1 = f"{agg[f'{cls}_f1_mean']:.3f}±{agg[f'{cls}_f1_std']:.3f}"
-        au = f"{agg[f'{cls}_auc_mean']:.3f}±{agg[f'{cls}_auc_std']:.3f}"
-        print(f"  {DISPLAY_NAMES[cls]:<22} {f1:>14} {au:>14}")
-    print("="*70)
+        f1_lo, f1_hi = agg[f"{cls}_f1_ci"]
+        au_lo, au_hi = agg[f"{cls}_auc_ci"]
+        f1 = f"{agg[f'{cls}_f1_mean']:.3f}±{agg[f'{cls}_f1_std']:.3f} [{f1_lo:.3f}–{f1_hi:.3f}]"
+        au = f"{agg[f'{cls}_auc_mean']:.3f}±{agg[f'{cls}_auc_std']:.3f} [{au_lo:.3f}–{au_hi:.3f}]"
+        print(f"  {DISPLAY_NAMES[cls]:<22} {f1:>26} {au:>26}")
+    print("="*75)
     return agg
 
 

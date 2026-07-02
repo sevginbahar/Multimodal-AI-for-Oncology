@@ -6,22 +6,31 @@ A multimodal deep learning pipeline for melanocytic skin lesion classification c
 
 ## Results
 
+All results: patient-level, 5-fold cross-validation, logistic regression classifier.
+
 | Model | Balanced Accuracy | Macro AUC | Macro F1 |
 |-------|:-----------------:|:---------:|:--------:|
-| PanDerm pre-trained (no fine-tuning) | 0.524 ± 0.066 | 0.723 ± 0.055 | 0.506 ± 0.065 |
-| PanDerm fine-tuned (image only) | 0.546 ± 0.040 | 0.699 ± 0.041 | 0.523 ± 0.047 |
-| **PanDerm + BioClinicalBERT (fusion)** | **0.603 ± 0.060** | **0.778 ± 0.057** | **0.576 ± 0.061** |
+| PanDerm (frozen) | 0.524 ± 0.066 | 0.723 ± 0.055 | 0.506 ± 0.065 |
+| PanDerm (fine-tune) | 0.546 ± 0.040 | 0.699 ± 0.041 | 0.523 ± 0.047 |
+| BioClinicalBERT (pathology reports) | 0.897 ± 0.015 | 0.976 ± 0.015 | 0.898 ± 0.016 |
+| Late Fusion (fine-tune + pathology) | 0.603 ± 0.060 | 0.778 ± 0.057 | 0.576 ± 0.061 |
+| **Late Fusion (frozen + pathology)** | **0.747 ± 0.082** | **0.903 ± 0.026** | **0.733 ± 0.084** |
 
-> Fusion evaluated on 138/177 patients with both dermoscopy images and clinical reports.
-> All results: patient-level, 5-fold cross-validation, logistic regression classifier.
+> BioClinicalBERT and fusion evaluated on 177 and 138 patients respectively (those with both modalities).
+> Paired t-tests confirm Late Fusion (frozen) significantly outperforms PanDerm (frozen) on all metrics (p=0.002–0.005).
+> BioClinicalBERT alone significantly outperforms the best fusion model on all metrics (p=0.001–0.017).
 
-**Per-class breakdown:**
+**Significance tests (paired t-test, 5-fold, Macro AUC):**
 
-| Model | DN F1 | DN AUC | MIA F1 | MIA AUC | Minsitu F1 | Minsitu AUC |
-|-------|:-----:|:------:|:------:|:-------:|:----------:|:-----------:|
-| Pre-trained | 0.512 ± 0.106 | 0.746 ± 0.067 | 0.667 ± 0.142 | 0.813 ± 0.100 | 0.340 ± 0.079 | 0.609 ± 0.056 |
-| Fine-tuned | 0.543 ± 0.131 | 0.720 ± 0.084 | 0.690 ± 0.079 | 0.814 ± 0.108 | 0.337 ± 0.100 | 0.564 ± 0.061 |
-| **Fusion** | **0.601 ± 0.131** | **0.785 ± 0.083** | **0.722 ± 0.093** | **0.890 ± 0.069** | **0.404 ± 0.119** | **0.660 ± 0.111** |
+| Comparison | Δ | 95% CI | p |
+|------------|:-:|:------:|:-:|
+| Late Fusion (fine-tune) vs PanDerm (fine-tune) | +0.079 | [+0.018, +0.141] | 0.023 * |
+| Late Fusion (frozen) vs PanDerm (frozen) | +0.180 | [+0.109, +0.250] | 0.002 * |
+| Late Fusion (frozen) vs Late Fusion (fine-tune) | +0.124 | [+0.053, +0.196] | 0.009 * |
+| BioClinicalBERT vs Late Fusion (frozen) | +0.074 | [+0.049, +0.098] | 0.001 * |
+| BioClinicalBERT vs PanDerm (fine-tune) | +0.277 | [+0.230, +0.324] | <0.001 * |
+
+\* p < 0.05
 
 DN = Dysplastic Nevus · MIA = Melanoma Stage IA · Minsitu = Melanoma In Situ
 
@@ -204,7 +213,12 @@ Encodes pathology reports with BioClinicalBERT (`emilyalsentzer/Bio_ClinicalBERT
 **Output:** `clinical_outputs/clinical_embeddings.npy` (N, 768)
 
 ### 8. `late_fusion.py`
-Concatenates image features (1024-dim) and text embeddings (768-dim) → 1792-dim, then evaluates with logistic regression.
+Concatenates image features (1024-dim) and text embeddings (768-dim) → 1792-dim, then evaluates with logistic regression. Supports both frozen and fine-tuned image features via `--mode`.
+
+```bash
+python fusion/late_fusion.py --mode finetune   # fine-tuned PanDerm + text
+python fusion/late_fusion.py --mode frozen     # frozen PanDerm + text
+```
 
 **Output:** `fusion_results/fusion_kfold_results.csv`, fusion plots
 
