@@ -19,6 +19,7 @@ Outputs (saved to FEATURES_DIR):
 
 import sys
 import os
+import argparse
 import numpy as np
 import pandas as pd
 import torch
@@ -35,6 +36,11 @@ from config import (
     CLASS_LABELS, IMAGENET_MEAN, IMAGENET_STD,
     NB_CLASSES, BATCH_SIZE, NUM_WORKERS, N_FOLDS,
 )
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune")
+args, _ = parser.parse_known_args()
+USE_FROZEN = args.mode == "frozen"
 
 FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -154,24 +160,45 @@ def main():
     manifest = load_manifest()
 
     # ── Per-fold image-level feature extraction ───────────────────────────
-    for fold_idx in range(N_FOLDS):
-        cache = FEATURES_DIR / f"fold{fold_idx}_image_features.npy"
-        if cache.exists():
-            print(f"Fold {fold_idx}: cached — skipping extraction")
-            continue
+    if USE_FROZEN:
+        # Extract once with pretrained checkpoint, reuse across all folds
+        print(f"\nFrozen mode: extracting with pretrained checkpoint")
+        print(f"  {CHECKPOINT_LARGE}")
+        shared_cache = FEATURES_DIR / "frozen_image_features.npy"
+        if shared_cache.exists():
+            print("  Cached — skipping extraction")
+            feats = np.load(str(shared_cache))
+        else:
+            model = load_panderm_encoder(CHECKPOINT_LARGE)
+            feats = extract_features(model, manifest["input_image"].tolist())
+            np.save(str(shared_cache), feats)
+            del model; torch.cuda.empty_cache()
+            print(f"  Saved {shared_cache.name}  {feats.shape}")
 
-        fold_dir = OUTPUT_DIR / f"results_fold{fold_idx}"
-        try:
-            ckpt_path = find_best_checkpoint(fold_dir)
-        except FileNotFoundError as e:
-            print(f"Fold {fold_idx}: {e} — skipping"); continue
+        for fold_idx in range(N_FOLDS):
+            cache = FEATURES_DIR / f"fold{fold_idx}_image_features.npy"
+            if not cache.exists():
+                np.save(str(cache), feats)
+                print(f"  Fold {fold_idx}: linked frozen features")
+    else:
+        for fold_idx in range(N_FOLDS):
+            cache = FEATURES_DIR / f"fold{fold_idx}_image_features.npy"
+            if cache.exists():
+                print(f"Fold {fold_idx}: cached — skipping extraction")
+                continue
 
-        print(f"\nFold {fold_idx}: loading {ckpt_path.name}")
-        model = load_panderm_encoder(ckpt_path)
-        feats = extract_features(model, manifest["input_image"].tolist())
-        np.save(str(cache), feats)
-        del model; torch.cuda.empty_cache()
-        print(f"  Saved {cache.name}  {feats.shape}")
+            fold_dir = OUTPUT_DIR / f"results_fold{fold_idx}"
+            try:
+                ckpt_path = find_best_checkpoint(fold_dir)
+            except FileNotFoundError as e:
+                print(f"Fold {fold_idx}: {e} — skipping"); continue
+
+            print(f"\nFold {fold_idx}: loading {ckpt_path.name}")
+            model = load_panderm_encoder(ckpt_path)
+            feats = extract_features(model, manifest["input_image"].tolist())
+            np.save(str(cache), feats)
+            del model; torch.cuda.empty_cache()
+            print(f"  Saved {cache.name}  {feats.shape}")
 
     # ── Aggregate to patient level ────────────────────────────────────────
     manifest["patient_id"] = manifest["patient_id"].astype(str)
