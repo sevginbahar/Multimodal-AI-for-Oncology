@@ -224,11 +224,13 @@ def stage_extract_features(use_finetuned: bool = True):
     subprocess.run(cmd, check=True)
 
 
-def stage_evaluate():
+def stage_evaluate(use_finetuned: bool = True):
     """Run logistic regression + generate all plots (CPU only)."""
-    sys.path.insert(0, str(PIPELINE_DIR / "panderm"))
-    import evaluate as ev
-    ev.main()
+    script = PIPELINE_DIR / "panderm" / "evaluate.py"
+    mode   = "finetune" if use_finetuned else "frozen"
+    cmd    = [sys.executable, str(script), "--mode", mode]
+    print(f"Running: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 
 def stage_clinical_modality():
@@ -334,6 +336,8 @@ def main():
             bound_func = lambda f=use_finetuned: stage_extract_features(use_finetuned=f)
         elif stage_name == "fusion":
             bound_func = lambda f=use_finetuned: stage_fusion(use_finetuned=f)
+        elif stage_name == "evaluate":
+            bound_func = lambda f=use_finetuned: stage_evaluate(use_finetuned=f)
         else:
             bound_func = func
 

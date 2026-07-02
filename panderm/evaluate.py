@@ -21,9 +21,16 @@ Outputs (saved to OUTPUT_DIR):
 
 import sys
 import os
+import argparse
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune")
+args, _ = parser.parse_known_args()
+MODE_LABEL  = "Fine-Tuned" if args.mode == "finetune" else "Frozen"
+RESULTS_CSV = f"kfold_results_{args.mode}.csv"
 import torch
 import torchvision.transforms as transforms
 from pathlib import Path
@@ -144,7 +151,7 @@ def print_summary(fold_results):
             agg[f"{cls}_{mt}_ci"]   = _ci95(vals)
 
     print("\n" + "="*75)
-    print("RESULTS — Fine-Tuned PanDerm (Patient-Level, 5-Fold CV)")
+    print(f"RESULTS — {MODE_LABEL} PanDerm (Patient-Level, 5-Fold CV)")
     print("="*75)
     for label, key in [("Balanced Accuracy", "balanced_accuracy"),
                         ("Accuracy",          "accuracy"),
@@ -176,7 +183,7 @@ def save_results(fold_results, agg):
             row[f"{cls}_f1"]  = r["per_class_f1"][cls]
             row[f"{cls}_auc"] = r["per_class_auc"][cls]
         rows.append(row)
-    pd.DataFrame(rows).to_csv(OUTPUT_DIR / "kfold_results_finetuned.csv", index=False)
+    pd.DataFrame(rows).to_csv(OUTPUT_DIR / RESULTS_CSV, index=False)
     for r in fold_results:
         (OUTPUT_DIR / f"fold_{r['fold']}_report.txt").write_text(
             f"Fold {r['fold']} — train={r['n_train']} test={r['n_test']}\n\n"
@@ -281,7 +288,7 @@ def plot_umap(fold_results: list, output_path: Path):
         ax.scatter(embedding[mask, 0], embedding[mask, 1],
                    c=COLORS[lv], s=40, alpha=0.7, edgecolors="k", linewidth=0.5,
                    label=DISPLAY_NAMES[cls])
-    ax.set_title("UMAP — Fine-Tuned PanDerm Features (5-Fold)", fontsize=13, fontweight="bold")
+    ax.set_title(f"UMAP — {MODE_LABEL} PanDerm Features (5-Fold)", fontsize=13, fontweight="bold")
     ax.set_xlabel("UMAP 1"); ax.set_ylabel("UMAP 2"); ax.legend()
     ax.grid(linestyle="--", alpha=0.3)
     plt.tight_layout()
@@ -392,9 +399,9 @@ def generate_attention_maps(manifest: pd.DataFrame, model: torch.nn.Module,
         for ax in axes[i]: ax.axis("off")
         print(f"  {os.path.basename(img_path)}")
 
-    plt.suptitle("PanDerm Attention Maps (Fine-Tuned)", fontsize=14, fontweight="bold")
+    plt.suptitle(f"PanDerm Attention Maps ({MODE_LABEL})", fontsize=14, fontweight="bold")
     plt.tight_layout()
-    out_path = output_dir / "attention_map_examples_finetuned.png"
+    out_path = output_dir / f"attention_map_examples_{args.mode}.png"
     plt.savefig(str(out_path), dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {out_path}")
