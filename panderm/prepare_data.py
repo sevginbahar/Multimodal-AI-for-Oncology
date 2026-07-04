@@ -13,12 +13,47 @@ from sklearn.model_selection import StratifiedGroupKFold
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
-    DATA_ROOT, OUTPUT_DIR, CLASS_NAMES, CLASS_LABELS,
+    DATA_ROOT, METADATA_CSV, OUTPUT_DIR, CLASS_NAMES, CLASS_LABELS,
     IMAGE_EXTENSIONS, N_FOLDS, RANDOM_SEED,
 )
 
+LABEL_TO_CLASS = {v: k for k, v in CLASS_LABELS.items()}
+
 
 def scan_dataset(data_root: Path) -> pd.DataFrame:
+    """
+    Build a manifest from either:
+      - flat folder + CSV (METADATA_CSV is set): reads image paths and labels from CSV
+      - class/patient_id subfolder structure (default): walks data_root/{class}/{patient_id}/
+    """
+    if METADATA_CSV is not None:
+        return _scan_from_csv(data_root, Path(METADATA_CSV))
+    return _scan_from_folders(data_root)
+
+
+def _scan_from_csv(data_root: Path, csv_path: Path) -> pd.DataFrame:
+    """Flat folder + CSV manifest (e.g. MILK10K)."""
+    meta = pd.read_csv(csv_path)
+    rows = []
+    for _, row in meta.iterrows():
+        img_path = data_root / f"{row['isic_id']}.jpg"
+        if not img_path.exists():
+            continue
+        class_name = LABEL_TO_CLASS.get(int(row["label"]))
+        if class_name is None:
+            continue
+        rows.append({
+            "image_path": str(img_path),
+            "patient_id": str(row["lesion_id"]),
+            "folder_name": str(row["lesion_id"]),
+            "diagnosis":   class_name,
+            "label":       int(row["label"]),
+        })
+    print(f"  CSV mode: {len(rows)} images loaded from {csv_path.name}")
+    return pd.DataFrame(rows)
+
+
+def _scan_from_folders(data_root: Path) -> pd.DataFrame:
     """Walk dermoscopy/{class}/{patient_id}/*.JPG and build a manifest."""
     rows = []
     for class_name in CLASS_NAMES:
@@ -32,10 +67,8 @@ def scan_dataset(data_root: Path) -> pd.DataFrame:
             if not patient_dir.is_dir():
                 continue
 
-            # Extract numeric patient ID from folder name
-            # (some folders have annotations, e.g. "13901116 3 de IA")
             folder_name = patient_dir.name
-            patient_id = folder_name.split()[0]
+            patient_id  = folder_name.split()[0]
 
             images = [
                 f for f in patient_dir.iterdir()
@@ -51,12 +84,11 @@ def scan_dataset(data_root: Path) -> pd.DataFrame:
                     "image_path": str(img_path),
                     "patient_id": patient_id,
                     "folder_name": folder_name,
-                    "diagnosis": class_name,
-                    "label": label,
+                    "diagnosis":   class_name,
+                    "label":       label,
                 })
 
-    df = pd.DataFrame(rows)
-    return df
+    return pd.DataFrame(rows)
 
 
 def create_kfold_splits(df: pd.DataFrame, n_folds: int, seed: int) -> pd.DataFrame:

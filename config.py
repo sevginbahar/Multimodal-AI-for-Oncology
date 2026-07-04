@@ -8,6 +8,7 @@ from pathlib import Path
 # Paths
 # ============================================================
 DATA_ROOT     = Path("/Users/baharsevgin/Desktop/Maiques_Lab/dermoscopy")
+METADATA_CSV  = None  # set to a CSV path for flat-folder datasets (e.g. MILK10K)
 PANDERM_REPO  = Path("/Users/baharsevgin/Desktop/Maiques_Lab/PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
 PANDERM_CLASS = PANDERM_REPO / "classification"
 
@@ -19,7 +20,8 @@ OUTPUT_DIR    = PIPELINE_DIR / "results"
 SEGMENTED_DIR = PIPELINE_DIR / "segmented_cache"
 FEATURES_DIR  = PIPELINE_DIR / "features"
 CSV_DIR       = PIPELINE_DIR / "cross-fold-csv"
-CLINICAL_DIR  = Path("/data/home/Maiques-Lab/clinical_outputs")
+CLINICAL_DIR   = Path("/data/home/Maiques-Lab/clinical_outputs")
+CLINICAL_INPUT = Path("/data/home/Maiques-Lab/harmonized_pathology_reports.csv")  # raw clinical data
 
 # ============================================================
 # Class definitions

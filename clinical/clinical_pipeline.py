@@ -35,13 +35,13 @@ from scipy.stats import spearmanr
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
-    DATA_ROOT, CLINICAL_DIR,
+    DATA_ROOT, CLINICAL_DIR, CLINICAL_INPUT,
     CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────
 CONFIG = {
-    "input_path":       str(DATA_ROOT.parent / "clinical_data.xlsx"),
+    "input_path":       str(CLINICAL_INPUT),
     "patient_id_col":   "clinical_history_number",
     "text_cols": {
         "diagnosis":    "diagnostic_summary_english",
