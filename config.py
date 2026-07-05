@@ -7,15 +7,15 @@ from pathlib import Path
 # ============================================================
 # Paths
 # ============================================================
-DATA_ROOT     = Path("/Users/baharsevgin/Desktop/Maiques_Lab/dermoscopy")
+DATA_ROOT     = Path("/Users/Maiques_Lab/dermoscopy")
 METADATA_CSV  = None  # set to a CSV path for flat-folder datasets (e.g. MILK10K)
-PANDERM_REPO  = Path("/Users/baharsevgin/Desktop/Maiques_Lab/PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
+PANDERM_REPO  = Path("/Users/Maiques_Lab/PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
 PANDERM_CLASS = PANDERM_REPO / "classification"
 
-CHECKPOINT_LARGE = Path("/Users/baharsevgin/Desktop/Maiques_Lab/panderm_ll_data6_checkpoint-499.pth")
-CHECKPOINT_BASE  = Path("/Users/baharsevgin/Desktop/Maiques_Lab/panderm_bb_data6_checkpoint-499.pth")
+CHECKPOINT_LARGE = Path("/Users/Maiques_Lab/panderm_ll_data6_checkpoint-499.pth")
+CHECKPOINT_BASE  = Path("/Users/Maiques_Lab/panderm_bb_data6_checkpoint-499.pth")
 
-PIPELINE_DIR  = Path("/Users/baharsevgin/Desktop/Maiques_Lab/improved_pipeline")
+PIPELINE_DIR  = Path("/Users/Maiques_Lab/improved_pipeline")
 OUTPUT_DIR    = PIPELINE_DIR / "results"
 SEGMENTED_DIR = PIPELINE_DIR / "segmented_cache"
 FEATURES_DIR  = PIPELINE_DIR / "features"
