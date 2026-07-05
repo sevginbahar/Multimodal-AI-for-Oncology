@@ -54,14 +54,6 @@ CONFIG = {
     "output_dir":       str(CLINICAL_DIR),
 }
 
-REGEX_FLAGS = {
-    "flag_complete_excision": ["complete excision", "free margins", "free of lesion"],
-    "flag_ulceration":        ["ulceration", "ulcerated"],
-    "flag_mitosis":           ["mitosis", "mitotic"],
-    "flag_vascular_invasion": ["vascular invasion", "lymphatic invasion", "lymphovascular"],
-    "flag_regression":        ["regressive", "regression", "involutive"],
-    "flag_nevus_component":   ["melanocytic nevus", "compound nevus", "junctional nevus"],
-}
 
 
 # ── Data loading ──────────────────────────────────────────────────────────
@@ -79,18 +71,50 @@ def load_data(path: str) -> pd.DataFrame:
     return df
 
 
+# ── Diagnosis term stripping ──────────────────────────────────────────────
+_STRIP_PATTERNS = [
+    r"melanoma in situ",
+    r"melanoma stage ia",
+    r"malignant melanoma",
+    r"superficial melanoma",
+    r"melanoma",
+    r"dysplastic nevus",
+    r"melanocytic nevus",
+    r"compound nevus",
+    r"junctional nevus",
+    r"nevus",
+    r"clark level\s*:?\s*[ivxIVX0-9]+",
+    r"breslow[^.]*?mm",
+    r"breslow",
+    r"pT[0-9is][abc]?",
+    r"ptis",
+    r"pathological stage[^.]*",
+    r"stage i[ab]?",
+    r"radial growth phase",
+    r"dysplastic changes",
+    r"dysplastic features",
+    r"dysplastic",
+    r"displastic[^.]*",
+    r"peritumoral",
+    r"papillary dermis invasion",
+    r"I\.T\s*[0-9]+[A-Z]?",
+]
+
+def strip_diagnosis_terms(text: str) -> str:
+    if not text:
+        return ""
+    for p in _STRIP_PATTERNS:
+        text = re.sub(p, "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 # ── Report building ───────────────────────────────────────────────────────
 def build_full_report(row: pd.Series) -> str:
     diag  = str(row.get(CONFIG["text_cols"]["diagnosis"],   "") or "").strip()
     macro = str(row.get(CONFIG["text_cols"]["macroscopic"], "") or "").strip()
-    return "\n".join(p for p in [diag, macro] if p).strip()
+    raw   = "\n".join(p for p in [diag, macro] if p).strip()
+    return strip_diagnosis_terms(raw)
 
-
-# ── Boolean flags ─────────────────────────────────────────────────────────
-def extract_flag(text: str, keywords: list) -> bool:
-    if pd.isna(text):
-        return False
-    return any(k in text.lower() for k in keywords)
 
 
 # ── BioClinicalBERT embeddings ────────────────────────────────────────────
@@ -323,13 +347,6 @@ def main():
     print(f"Avg length    : {lengths.mean():.0f} chars")
     print(f"Empty reports : {(lengths == 0).sum()}")
 
-    # Boolean flags
-    for flag, keywords in REGEX_FLAGS.items():
-        df[flag] = df["full_report"].apply(lambda t: extract_flag(t, keywords))
-    flag_cols = list(REGEX_FLAGS.keys())
-    print("\nBoolean flag totals:")
-    print(df[flag_cols].sum().to_string())
-
     # Embeddings
     print("\nLoading BioClinicalBERT ...")
     embeddings = get_embeddings(
@@ -355,29 +372,6 @@ def main():
         report_lengths = report_lengths,
     )
 
-    # ── Flag-only baseline ────────────────────────────────────────────────
-    flag_cols  = list(REGEX_FLAGS.keys())
-    flag_feats = df[flag_cols].astype(float).values
-    if flag_feats.shape[1] > 0:
-        print("\n── Flag-only baseline (6 binary flags, no BERT) ────────────")
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import balanced_accuracy_score
-        loo    = LeaveOneOut()
-        clf    = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
-        f_preds = []
-        for train_idx, test_idx in loo.split(flag_feats):
-            clf.fit(flag_feats[train_idx], labels_enc[train_idx])
-            f_preds.append(clf.predict(flag_feats[test_idx])[0])
-        flag_acc  = accuracy_score(labels_enc, f_preds)
-        flag_bacc = balanced_accuracy_score(labels_enc, f_preds)
-        bert_bacc = balanced_accuracy_score(labels_enc,
-                        KNeighborsClassifier(n_neighbors=5, metric="cosine")
-                        .fit(embeddings, labels_enc)
-                        .predict(embeddings))
-        print(f"  Flags-only accuracy (LOO)  : {flag_acc:.3f} ({flag_acc*100:.1f}%)")
-        print(f"  Flags-only balanced acc    : {flag_bacc:.3f}")
-        print(f"  {'⚠️ BERT adds little over flags' if flag_bacc > 0.7 else '✅ BERT adds value beyond simple flags'}")
-
     # LR 5-fold CV
     print("\n── LR 5-Fold CV (matched protocol) ─────────────────────────")
     run_lr_5fold(embeddings, labels_enc, list(le.classes_), out_dir)
@@ -386,10 +380,6 @@ def main():
     emb_path = out_dir / "clinical_embeddings.npy"
     np.save(str(emb_path), embeddings)
     print(f"\nSaved: {emb_path}  shape={embeddings.shape}")
-
-    feat_cols = [CONFIG["patient_id_col"], CONFIG["label_col"]] + flag_cols
-    df[feat_cols].to_csv(out_dir / "clinical_features.csv", index=False)
-    print(f"Saved: clinical_features.csv")
 
     df[[CONFIG["patient_id_col"], CONFIG["label_col"], "full_report"]].to_csv(
         out_dir / "full_reports.csv", index=False
