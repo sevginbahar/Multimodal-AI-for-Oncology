@@ -340,6 +340,9 @@ def main():
     # Load
     df = load_data(CONFIG["input_path"])
 
+    # Harmonise patient ID — strip whitespace so merges are consistent
+    df[CONFIG["patient_id_col"]] = df[CONFIG["patient_id_col"]].astype(str).str.strip()
+
     # Build reports
     df["full_report"] = df.apply(build_full_report, axis=1)
     lengths = df["full_report"].str.len()
