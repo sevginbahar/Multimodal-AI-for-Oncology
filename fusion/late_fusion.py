@@ -78,7 +78,7 @@ def load_and_align():
     # Clinical embeddings
     clin_emb = np.load(str(CLINICAL_DIR / "clinical_embeddings.npy"))          # (177, 768)
     clin_df  = pd.read_csv(str(CLINICAL_DIR / "full_reports.csv"))
-    clin_df["patient_id"] = clin_df["clinical_history_number"].astype(str)
+    clin_df["patient_id"] = clin_df["clinical_history_number"].astype(str).str.strip()
     clin_df["clin_idx"]   = range(len(clin_df))
     print(f"Clinical embeddings : {clin_emb.shape}")
 
@@ -90,7 +90,7 @@ def load_and_align():
 
     img_df = pd.DataFrame({
         "group_id":   group_ids,
-        "patient_id": [g.split("__")[0] for g in group_ids],
+        "patient_id": [g.split("__")[0].strip() for g in group_ids],
         "diagnosis":  [g.split("__")[1] for g in group_ids],
         "label":      img_labels,
         "fold":       [fold_assign[g] for g in group_ids],
