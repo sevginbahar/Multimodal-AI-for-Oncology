@@ -42,6 +42,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from sklearn.metrics import (
     balanced_accuracy_score, accuracy_score,
     classification_report, confusion_matrix,
@@ -81,12 +82,16 @@ def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
         X_tr, y_tr = patient_features[train_mask], patient_labels[train_mask]
         X_te, y_te = patient_features[test_mask],  patient_labels[test_mask]
 
-        clf = LogisticRegression(
-            C=LOGREG_C, max_iter=LOGREG_MAX_ITER,
-            class_weight="balanced", solver="lbfgs",
-            random_state=42, multi_class="multinomial",
+        inner_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+        gs = GridSearchCV(
+            LogisticRegression(max_iter=LOGREG_MAX_ITER, class_weight="balanced",
+                               solver="lbfgs", random_state=42),
+            param_grid={"C": [0.01, 0.03, 0.1, 0.3, 1.0]},
+            cv=inner_cv, scoring="balanced_accuracy", n_jobs=-1,
         )
-        clf.fit(X_tr, y_tr)
+        gs.fit(X_tr, y_tr)
+        best_c = gs.best_params_["C"]
+        clf    = gs.best_estimator_
         y_pred  = clf.predict(X_te)
         y_proba = clf.predict_proba(X_te)
 
@@ -103,6 +108,7 @@ def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
 
         result = {
             "fold":                fold_idx,
+            "best_c":              best_c,
             "balanced_accuracy":   balanced_accuracy_score(y_te, y_pred),
             "accuracy":            accuracy_score(y_te, y_pred),
             "macro_auc":           macro_auc,
@@ -123,7 +129,7 @@ def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
         fold_results.append(result)
         print(f"  Fold {fold_idx+1}: BalAcc={result['balanced_accuracy']:.3f}  "
               f"AUC={macro_auc:.3f}  F1={result['macro_f1']:.3f}  "
-              f"(train={result['n_train']}, test={result['n_test']})")
+              f"C={best_c}  (train={result['n_train']}, test={result['n_test']})")
 
     return fold_results
 

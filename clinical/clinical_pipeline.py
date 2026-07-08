@@ -23,7 +23,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import LeaveOneOut, StratifiedKFold
+from sklearn.model_selection import LeaveOneOut, StratifiedKFold, GridSearchCV
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score,
     classification_report, roc_auc_score, cohen_kappa_score,
@@ -256,10 +256,16 @@ def run_lr_5fold(embeddings: np.ndarray, labels: np.ndarray,
         X_tr, y_tr = embeddings[train_idx], labels[train_idx]
         X_te, y_te = embeddings[test_idx],  labels[test_idx]
 
-        clf = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced",
-                                 solver="lbfgs", random_state=42,
-                                 multi_class="multinomial")
-        clf.fit(X_tr, y_tr)
+        inner_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+        gs = GridSearchCV(
+            LogisticRegression(max_iter=2000, class_weight="balanced",
+                               solver="lbfgs", random_state=42),
+            param_grid={"C": [0.01, 0.03, 0.1, 0.3, 1.0]},
+            cv=inner_cv, scoring="balanced_accuracy", n_jobs=-1,
+        )
+        gs.fit(X_tr, y_tr)
+        best_c = gs.best_params_["C"]
+        clf    = gs.best_estimator_
         y_pred  = clf.predict(X_te)
         y_proba = clf.predict_proba(X_te)
 
@@ -276,6 +282,7 @@ def run_lr_5fold(embeddings: np.ndarray, labels: np.ndarray,
 
         fold_results.append({
             "fold":              fold_idx,
+            "best_c":            best_c,
             "balanced_accuracy": balanced_accuracy_score(y_te, y_pred),
             "accuracy":          accuracy_score(y_te, y_pred),
             "macro_auc":         macro_auc,
@@ -287,7 +294,7 @@ def run_lr_5fold(embeddings: np.ndarray, labels: np.ndarray,
             "n_test":            len(test_idx),
         })
         print(f"  Fold {fold_idx+1}: BalAcc={fold_results[-1]['balanced_accuracy']:.3f}  "
-              f"AUC={macro_auc:.3f}  F1={fold_results[-1]['macro_f1']:.3f}")
+              f"AUC={macro_auc:.3f}  F1={fold_results[-1]['macro_f1']:.3f}  C={best_c}")
 
     # Aggregate
     scalar_metrics = ["balanced_accuracy", "accuracy", "macro_auc", "macro_f1", "cohen_kappa"]
