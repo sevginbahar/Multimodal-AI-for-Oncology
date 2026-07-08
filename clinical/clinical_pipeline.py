@@ -154,7 +154,26 @@ _STRIP_PATTERNS = [
     r"displás[a-z]*[^.]*",                   # Spanish accented variants
     r"displasico[^.]*",                      # Spanish unaccented
     r"peritumoral",
-    r"I\.T\s*[0-9]+[A-Z]?",
+    # ── Pathology processing artefacts ───────────────────────────────────
+    r"\[text appears truncated\]",
+    r"I\.T\.?\s*(?:MDC|SMC|JBC|[A-Z]{1,3})?",   # I.T / I.T. / IT MDC etc
+    r"\bIT\b\s*(?:MDC|SMC|JBC)?",
+    r"I\.P\.?\s*(?:in cross[^.]*)?",             # I.P / I.P. / I.P in cross
+    r"\bIP\b\s*(?:in cross[^.]*)?",
+    r"in cross[\-\s]?section[^.]*",
+    r"in cross[^.]*",
+    r"total inclusion[^.]*",
+    r"partial inclusion[^.]*",
+    r"previous? IT[^.]*",
+    r"previa bisec[a-záéíóú]*",                  # previa bisección (Spanish)
+    r"(?:china|india|chinese) ink[^.]*",
+    r"marking limits with[^.]*",
+    r"marked with[^.]*ink[^.]*",
+    r"[0-9]+[A-Z]\s+cassette[^.]*",             # 2B cassette
+    r"cassette[^.]*",
+    r"bisect[a-z]*[^.]*",
+    r"(?:MATIAS[\-\s]GUIU|EGIDO)[^.]*",         # pathologist names
+    r"nan\s*$",                                   # trailing nan from CSV
 ]
 
 def strip_diagnosis_terms(text: str) -> str:
