@@ -4,8 +4,8 @@ Late Fusion — PanDerm + BioClinicalBERT  (Strategy C)
 Per-modality PCA → concat → logistic regression (5-fold CV).
 
 Fusion architecture:
-    Image  (1024-dim) → StandardScaler → PCA(PCA_IMG_DIM) ─┐
-    Text   ( 768-dim) → StandardScaler → PCA(PCA_TXT_DIM) ─┴→ concat → LR
+    Image  (1024-dim) → StandardScaler → PCA(8) ─┐
+    Text   ( 768-dim) → StandardScaler → PCA(8) ─┴→ concat(16) → LR
 
 C is selected by nested cross-validation inside each outer fold.
 All transforms are fit on the training split only — no leakage.
@@ -51,8 +51,8 @@ from config import (
 )
 
 # ── Fusion hyperparameters ────────────────────────────────────────────────
-PCA_IMG_DIM  = 16                            # image PCA dims
-PCA_TXT_DIM  = 16                            # text PCA dims
+PCA_IMG_DIM  = 8                             # image PCA dims
+PCA_TXT_DIM  = 8                             # text PCA dims
 C_GRID       = [0.01, 0.03, 0.1, 0.3, 1.0]  # nested CV grid
 
 COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
