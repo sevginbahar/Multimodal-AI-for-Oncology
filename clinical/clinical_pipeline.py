@@ -100,12 +100,31 @@ _STRIP_PATTERNS = [
     r"pathological stage[^.]*",
     r"stage i[ab]?",
     r"radial growth phase",
+    r"vertical growth phase",
+    r"radial and vertical growth[^.]*",
+    r"in[\s\-]situ",                         # standalone "in situ" / "in-situ"
+    r"pagetoid[^.]*",                        # pagetoid infiltration/spread
+    r"regression[^.]*",                      # regression signs/present/<50%
+    r"microsatellitosis",
+    r"vascular or lymphatic invasion[^.]*",
+    r"lymphatic invasion[^.]*",
+    r"vascular invasion[^.]*",
+    r"tumor thickness[^.]*",
+    r"maximum thickness[^.]*",
+    r"maximum invasion depth[^.]*",
+    r"infiltrat[a-z]*\s+the\s+papillary\s+dermis[^.]*",
+    r"papillary dermis[^.]*",
+    r"dermal infiltration[^.]*",
+    r"dermal tissue infiltration[^.]*",
+    r"dermal tissue invasion[^.]*",
+    r"melanocytic dysplasia[^.]*",
+    r"dysplasia[^.]*",
+    r"epidermal migration of melanin[^.]*",
     r"dysplastic changes",
     r"dysplastic features",
     r"dysplastic",
     r"displastic[^.]*",
     r"peritumoral",
-    r"papillary dermis invasion",
     r"I\.T\s*[0-9]+[A-Z]?",
 ]
 
