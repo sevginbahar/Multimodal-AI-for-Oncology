@@ -277,24 +277,34 @@ def plot_fold_accuracy_bars(fold_results: list, output_path: Path):
     print(f"Saved: {output_path.name}")
 
 
-def plot_umap(fold_results: list, output_path: Path):
+def plot_umap(output_path: Path):
+    """UMAP on full patient feature vectors (fold 0), not probabilities."""
     try:
         import umap as umap_lib
     except ImportError:
         print("  umap-learn not installed — skipping (pip install umap-learn)")
         return
-    all_probs  = np.vstack([r["y_proba"] for r in fold_results])
-    all_labels = np.concatenate([r["y_test"] for r in fold_results])
-    print(f"  Fitting UMAP on {len(all_labels)} test patients...")
-    embedding = umap_lib.UMAP(n_neighbors=15, min_dist=0.1,
-                               n_components=2, random_state=42).fit_transform(all_probs)
+
+    feat_path = FEATURES_DIR / "patient_features_fold0.npy"
+    if not feat_path.exists():
+        print("  patient_features_fold0.npy not found — skipping UMAP")
+        return
+
+    features = np.load(str(feat_path))
+    labels   = np.load(str(FEATURES_DIR / "patient_labels.npy"))
+
+    print(f"  Fitting UMAP on {len(labels)} patients (features shape: {features.shape})...")
+    reducer   = umap_lib.UMAP(n_neighbors=30, min_dist=0.3, n_components=2,
+                               metric="cosine", random_state=42)
+    embedding = reducer.fit_transform(features)
+
     fig, ax = plt.subplots(figsize=(9, 7))
     for lv, cls in enumerate(CLASS_NAMES):
-        mask = all_labels == lv
+        mask = labels == lv
         ax.scatter(embedding[mask, 0], embedding[mask, 1],
                    c=COLORS[lv], s=40, alpha=0.7, edgecolors="k", linewidth=0.5,
                    label=DISPLAY_NAMES[cls])
-    ax.set_title(f"UMAP — {MODE_LABEL} PanDerm Features (5-Fold)", fontsize=13, fontweight="bold")
+    ax.set_title(f"UMAP — {MODE_LABEL} PanDerm Features", fontsize=13, fontweight="bold")
     ax.set_xlabel("UMAP 1"); ax.set_ylabel("UMAP 2"); ax.legend()
     ax.grid(linestyle="--", alpha=0.3)
     plt.tight_layout()
@@ -442,7 +452,7 @@ def main():
     plot_confusion_matrix(fold_results,   OUTPUT_DIR / "confusion_matrix_aggregate.png")
     plot_roc_curves(fold_results,         OUTPUT_DIR / "roc_curves_mean.png")
     plot_fold_accuracy_bars(fold_results, OUTPUT_DIR / "fold_accuracy_bars.png")
-    plot_umap(fold_results,               OUTPUT_DIR / "umap_patient_features.png")
+    plot_umap(OUTPUT_DIR / "umap_patient_features.png")
 
     # Attention maps — load fold 0 checkpoint
     print("\nGenerating attention maps (fold 0)...")
