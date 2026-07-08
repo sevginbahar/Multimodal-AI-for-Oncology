@@ -226,18 +226,20 @@ def validate_embeddings(embeddings: np.ndarray, labels: np.ndarray, label_names:
         import matplotlib.pyplot as plt
 
         print("\nRunning UMAP ...")
-        reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+        reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=30, min_dist=0.3,
+                            metric="cosine")
         emb_2d  = reducer.fit_transform(embeddings)
 
-        colours = plt.cm.Set1(np.linspace(0, 1, len(label_names)))
+        colours = ["#1565c0", "#d32f2f", "#6a1b9a"]
         fig, ax = plt.subplots(figsize=(8, 6))
         for i, label in enumerate(label_names):
             mask = labels == i
             ax.scatter(emb_2d[mask, 0], emb_2d[mask, 1],
-                       label=label, color=colours[i], alpha=0.7, s=40)
+                       label=label, color=colours[i], alpha=0.7, s=40,
+                       edgecolors="k", linewidth=0.5)
         ax.legend(fontsize=9)
-        ax.set_title("UMAP — BioClinicalBERT embeddings")
-        ax.set_xlabel("UMAP-1"); ax.set_ylabel("UMAP-2")
+        ax.set_title("UMAP — BioClinicalBERT Embeddings")
+        ax.set_xlabel("UMAP 1"); ax.set_ylabel("UMAP 2")
         plt.tight_layout()
         plt.savefig(Path(CONFIG["output_dir"]) / "umap_embeddings.png", dpi=150)
         plt.show()
