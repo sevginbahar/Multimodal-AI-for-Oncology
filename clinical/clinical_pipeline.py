@@ -99,17 +99,22 @@ _STRIP_PATTERNS = [
     r"ptis",
     r"pathological stage[^.]*",
     r"stage i[ab]?",
-    r"radial growth phase",
-    r"vertical growth phase",
-    r"horizontal growth phase",
+    r"radial growth[^.]*",
+    r"vertical growth[^.]*",
+    r"horizontal growth[^.]*",
     r"growth phase[^.]*",
-    r"radial and vertical growth[^.]*",
     r"in[\s\-]situ",                         # standalone "in situ" / "in-situ"
     r"pagetoid[^.]*",                        # pagetoid infiltration/spread
     r"regression[^.]*",                      # regression signs/present/<50%
-    r"involutive changes[^.]*",
-    r"involutional changes[^.]*",
-    r"involutionary changes[^.]*",
+    r"invol[a-z]+[^.]*",                     # involutive/involutional/involution
+    r"ulcerat[a-z]*[^.]*",                   # ulcerated/ulceration (all forms)
+    r"no ulceration[^.]*",
+    r"invasive[^.]*",                        # invasive / Stage: Invasive
+    r"acral[^.]*",                           # acral melanoma type
+    r"lentiginoso[^.]*",                     # Spanish lentiginous
+    r"follicular epithelium[^.]*",           # invasion depth marker
+    r"reticular dermis[^.]*",               # invasion depth
+    r"periadventitial dermis[^.]*",
     r"microsatellitosis",
     r"vascular or lymphatic invasion[^.]*",
     r"lymphatic invasion[^.]*",
@@ -147,6 +152,7 @@ _STRIP_PATTERNS = [
     r"dysplastic",
     r"displastic[^.]*",
     r"displás[a-z]*[^.]*",                   # Spanish accented variants
+    r"displasico[^.]*",                      # Spanish unaccented
     r"peritumoral",
     r"I\.T\s*[0-9]+[A-Z]?",
 ]
