@@ -63,8 +63,8 @@ parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune"
 args, _ = parser.parse_known_args()
 
 if args.mode == "frozen":
-    _IMG_FEATURES_DIR = PIPELINE_DIR / "non_fine_tune_results" / "features"
-    _IMG_OUTPUT_DIR   = PIPELINE_DIR / "non_fine_tune_results"
+    _IMG_FEATURES_DIR = FEATURES_DIR
+    _IMG_OUTPUT_DIR   = OUTPUT_DIR
     _MODE_LABEL       = "Frozen PanDerm + BioClinicalBERT"
 else:
     _IMG_FEATURES_DIR = FEATURES_DIR
