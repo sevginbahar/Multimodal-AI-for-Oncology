@@ -250,6 +250,7 @@ def validate_embeddings(embeddings: np.ndarray, labels: np.ndarray, label_names:
         ax.set_title("UMAP — BioClinicalBERT Embeddings")
         ax.set_xlabel("UMAP 1"); ax.set_ylabel("UMAP 2")
         plt.tight_layout()
+        Path(CONFIG["output_dir"]).mkdir(parents=True, exist_ok=True)
         plt.savefig(Path(CONFIG["output_dir"]) / "umap_embeddings.png", dpi=150)
         plt.show()
         print("Saved: umap_embeddings.png")
