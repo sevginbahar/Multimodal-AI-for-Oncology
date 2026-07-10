@@ -275,12 +275,12 @@ def save_results(fold_results):
 def plot_confusion_matrix(agg_cm):
     cm_norm = agg_cm.astype(float) / (agg_cm.sum(axis=1, keepdims=True) + 1e-9)
     fig, ax = plt.subplots(figsize=(7, 6))
-    sns.heatmap(agg_cm, annot=False, cmap="Blues",
+    sns.heatmap(cm_norm, annot=False, cmap="Blues", vmin=0, vmax=1,
                 xticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES],
                 yticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES], ax=ax)
-    for i in range(agg_cm.shape[0]):
-        for j in range(agg_cm.shape[1]):
-            ax.text(j+0.5, i+0.5, f"{agg_cm[i,j]}\n({cm_norm[i,j]:.0%})",
+    for i in range(cm_norm.shape[0]):
+        for j in range(cm_norm.shape[1]):
+            ax.text(j+0.5, i+0.5, f"{cm_norm[i,j]:.0%}\n(n={agg_cm[i,j]})",
                     ha="center", va="center", fontsize=11,
                     color="white" if cm_norm[i,j] > 0.5 else "black")
     ax.set_title("Fusion — Aggregate Confusion Matrix (Strategy C)",
