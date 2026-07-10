@@ -7,9 +7,9 @@ Usage:
     python clinical_pipeline.py
 
 Outputs:
-    clinical_embeddings.npy   (177, 768)  — dense text embeddings
-    clinical_features.csv     (177, 6)    — boolean clinical flags
-    full_reports.csv          (177, 3)    — raw report text
+    clinical_embeddings.npy   (174, 768)  — dense text embeddings
+    clinical_features.csv     (174, 6)    — boolean clinical flags
+    full_reports.csv          (174, 3)    — raw report text
     umap_embeddings.png                   — UMAP validation plot
 """
 
