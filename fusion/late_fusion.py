@@ -277,7 +277,8 @@ def plot_confusion_matrix(agg_cm):
     fig, ax = plt.subplots(figsize=(7, 6))
     sns.heatmap(cm_norm, annot=False, cmap="Blues", vmin=0, vmax=1,
                 xticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES],
-                yticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES], ax=ax)
+                yticklabels=[DISPLAY_NAMES[c] for c in CLASS_NAMES], ax=ax,
+                cbar_kws={"format": lambda x, _: f"{x:.0%}"})
     for i in range(cm_norm.shape[0]):
         for j in range(cm_norm.shape[1]):
             ax.text(j+0.5, i+0.5, f"{cm_norm[i,j]:.0%}\n(n={agg_cm[i,j]})",
