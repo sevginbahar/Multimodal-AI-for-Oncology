@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Local pipeline outputs (written under repo root via config.PIPELINE_DIR)
+/segmented_cache/
+/features/
+/cross-fold-csv/
+
+# Local-only backbone benchmark — not published to GitHub
+/baselines/
+
+# Local environment notes
+/environment_setup.txt

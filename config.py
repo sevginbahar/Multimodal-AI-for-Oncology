@@ -7,21 +7,21 @@ from pathlib import Path
 # ============================================================
 # Paths
 # ============================================================
-DATA_ROOT     = Path("/Users/Maiques_Lab/dermoscopy")
+DATA_ROOT     = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\dermoscopy\\dermoscopy")
 METADATA_CSV  = None  # set to a CSV path for flat-folder datasets (e.g. MILK10K)
-PANDERM_REPO  = Path("/Users/Maiques_Lab/PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
+PANDERM_REPO  = Path("C:\\content\\PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
 PANDERM_CLASS = PANDERM_REPO / "classification"
 
-CHECKPOINT_LARGE = Path("/Users/Maiques_Lab/panderm_ll_data6_checkpoint-499.pth")
-CHECKPOINT_BASE  = Path("/Users/Maiques_Lab/panderm_bb_data6_checkpoint-499.pth")
+CHECKPOINT_LARGE = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\panderm_ll_data6_checkpoint-499.pth")
+CHECKPOINT_BASE  = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\panderm_bb_data6_checkpoint-499.pth")
 
-PIPELINE_DIR  = Path("/Users/Maiques_Lab/improved_pipeline")
-OUTPUT_DIR    = PIPELINE_DIR / "results"
+PIPELINE_DIR  = Path("C:\\Users\\bahar sevgin\\Desktop\\Multimodal-AI-for-Oncology")
+OUTPUT_DIR    = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\dermoscopy_outputs")
 SEGMENTED_DIR = PIPELINE_DIR / "segmented_cache"
 FEATURES_DIR  = PIPELINE_DIR / "features"
 CSV_DIR       = PIPELINE_DIR / "cross-fold-csv"
-CLINICAL_DIR   = Path("/data/home/Maiques-Lab/clinical_outputs")
-CLINICAL_INPUT = Path("/data/home/Maiques-Lab/harmonized_pathology_reports.csv")  # raw clinical data
+CLINICAL_DIR   = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\clinical_outputs")
+CLINICAL_INPUT = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\harmonized_pathology_reports.csv")  # raw clinical data
 
 # ============================================================
 # Class definitions
