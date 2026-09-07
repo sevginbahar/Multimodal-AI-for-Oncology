@@ -14,7 +14,6 @@ Outputs:
 """
 
 import sys
-import re
 import numpy as np
 import pandas as pd
 import torch
@@ -33,10 +32,14 @@ from sklearn.metrics.pairwise import cosine_similarity
 from scipy import stats
 from scipy.stats import spearmanr
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))   # repo root -> config
+sys.path.insert(0, str(Path(__file__).parent))          # this dir  -> report_cleaning
 from config import (
     DATA_ROOT, CLINICAL_DIR, CLINICAL_INPUT,
     CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
+)
+from report_cleaning import (
+    build_full_report as _clean_report, CleanConfig, llm_filter, LEVEL_PRESETS,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────
@@ -71,125 +74,20 @@ def load_data(path: str) -> pd.DataFrame:
     return df
 
 
-# ── Diagnosis term stripping ──────────────────────────────────────────────
-_STRIP_PATTERNS = [
-    r"melanoma in situ",
-    r"melanoma stage ia",
-    r"malignant melanoma",
-    r"superficial melanoma",
-    r"melanoma",
-    r"dysplastic nevus",
-    r"melanocytic nevus",
-    r"compound nevus",
-    r"junctional nevus",
-    r"nevus",
-    r"clark(?:\s+level)?\s*:?\s*[ivxIVX0-9]*",
-    r"nivel\s+[ivxIVX0-9]+\s+de\s+clark",
-    r"nivel\s+[ivxIVX0-9]+\s+de\s+clark[^.]*",
-    r"breslow[^.]*?mm",
-    r"breslow",
-    r"[0-9]+[.,][0-9]+\s*mm",          # thickness measurements
-    r"mitoses?\s*:?\s*[0-9x\s]+mm[²³]?",
-    r"ulceration\s*:?\s*(yes|no|present|absent)",
-    r"ulceración\s*:?\s*(sí|no|presente|ausente)",
-    r"superficial spreading",
-    r"extensión superficial",
-    r"N[0-9]\b",                         # lymph node staging
-    r"pT[0-9is][abc]?",
-    r"ptis",
-    r"pathological stage[^.]*",
-    r"stage i[ab]?",
-    r"radial growth[^.]*",
-    r"vertical growth[^.]*",
-    r"horizontal growth[^.]*",
-    r"growth phase[^.]*",
-    r"in[\s\-]situ",                         # standalone "in situ" / "in-situ"
-    r"pagetoid[^.]*",                        # pagetoid infiltration/spread
-    r"regression[^.]*",                      # regression signs/present/<50%
-    r"invol[a-z]+[^.]*",                     # involutive/involutional/involution
-    r"ulcerat[a-z]*[^.]*",                   # ulcerated/ulceration (all forms)
-    r"no ulceration[^.]*",
-    r"invasive[^.]*",                        # invasive / Stage: Invasive
-    r"acral[^.]*",                           # acral melanoma type
-    r"lentiginoso[^.]*",                     # Spanish lentiginous
-    r"follicular epithelium[^.]*",           # invasion depth marker
-    r"reticular dermis[^.]*",               # invasion depth
-    r"periadventitial dermis[^.]*",
-    r"microsatellitosis",
-    r"vascular or lymphatic invasion[^.]*",
-    r"lymphatic invasion[^.]*",
-    r"vascular invasion[^.]*",
-    r"perineural invasion[^.]*",
-    r"angioinvasion[^.]*",
-    r"angiolinfatic invasion[^.]*",
-    r"tumor thickness[^.]*",
-    r"maximum thickness[^.]*",
-    r"maximum invasion depth[^.]*",
-    r"maximum infiltration depth[^.]*",
-    r"mitotic index[^.]*",
-    r"mitosis per mm[^.]*",
-    r"[0-9]+\s*(?:μm|micras|microns)[^.]*",  # thickness in microns
-    r"infiltrat[a-z]*\s+the\s+papillary\s+dermis[^.]*",
-    r"papillary dermis[^.]*",
-    r"dermal infiltration[^.]*",
-    r"dermal tissue infiltration[^.]*",
-    r"dermal tissue invasion[^.]*",
-    r"dermal invasion[^.]*",
-    r"lentigo maligno[^.]*",
-    r"lentiginous[^.]*",
-    r"acral lentiginous[^.]*",
-    r"malignant[^.]*",
-    r"maligno[^.]*",
-    r"melan[\-\s]?a\s+positive[^.]*",
-    r"hmb[\-\s]?45[^.]*",
-    r"melanocytic dysplasia[^.]*",
-    r"dysplasia[^.]*",
-    r"epidermal migration of melanin[^.]*",
-    r"ausencia de ulceraci[oó]n[^.]*",       # Spanish: absence of ulceration
-    r"sin ulceraci[oó]n[^.]*",               # Spanish: without ulceration
-    r"dysplastic changes",
-    r"dysplastic features",
-    r"dysplastic",
-    r"displastic[^.]*",
-    r"displás[a-z]*[^.]*",                   # Spanish accented variants
-    r"displasico[^.]*",                      # Spanish unaccented
-    r"peritumoral",
-    # ── Pathology processing artefacts ───────────────────────────────────
-    r"\[text appears truncated\]",
-    r"I\.T\.?\s*(?:MDC|SMC|JBC|[A-Z]{1,3})?",   # I.T / I.T. / IT MDC etc
-    r"\bIT\b\s*(?:MDC|SMC|JBC)?",
-    r"I\.P\.?\s*(?:in cross[^.]*)?",             # I.P / I.P. / I.P in cross
-    r"\bIP\b\s*(?:in cross[^.]*)?",
-    r"in cross[\-\s]?section[^.]*",
-    r"in cross[^.]*",
-    r"total inclusion[^.]*",
-    r"partial inclusion[^.]*",
-    r"previous? IT[^.]*",
-    r"previa bisec[a-záéíóú]*",                  # previa bisección (Spanish)
-    r"(?:china|india|chinese) ink[^.]*",
-    r"marking limits with[^.]*",
-    r"marked with[^.]*ink[^.]*",
-    r"[0-9]+[A-Z]\s+cassette[^.]*",             # 2B cassette
-    r"cassette[^.]*",
-    r"bisect[a-z]*[^.]*",
-    r"(?:MATIAS[\-\s]GUIU|EGIDO)[^.]*",         # pathologist names
-    r"nan\s*$",                                   # trailing nan from CSV
-]
-
-def strip_diagnosis_terms(text: str) -> str:
-    if not text:
-        return ""
-    for p in _STRIP_PATTERNS:
-        text = re.sub(p, "", text, flags=re.IGNORECASE)
-    return re.sub(r"\s{2,}", " ", text).strip()
+# ── Report building (delegated to report_cleaning.py) ─────────────────────
+# The filtering level is set by main() from --level.  Levels (Watson et al.
+# gradual extraction):
+#   orig      diagnostic summary + macroscopic, unfiltered   (upper bound / leak demo)
+#   termfilt  regex-delete diagnosis / staging / invasion terms
+#   diagdrop  drop the synoptic diagnosis, keep + regex-strip the macroscopic text
+#   fact      LLM keeps only literal morphological observation   (needs --llm-base-url)
+#   notext    no text  (image-only lower bound)
+_CLEAN_CFG = CleanConfig.from_level("termfilt", text_cols=CONFIG["text_cols"],
+                                    label_col=CONFIG["label_col"])
 
 
-# ── Report building ───────────────────────────────────────────────────────
 def build_full_report(row: pd.Series) -> str:
-    diag  = str(row.get(CONFIG["text_cols"]["diagnosis"],   "") or "").strip()
-    macro = str(row.get(CONFIG["text_cols"]["macroscopic"], "") or "").strip()
-    raw   = "\n".join(p for p in [diag, macro] if p).strip()
-    return strip_diagnosis_terms(raw)
+    return _clean_report(row, _CLEAN_CFG)
 
 
 
