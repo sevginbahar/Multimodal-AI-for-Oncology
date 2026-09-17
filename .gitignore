@@ -13,5 +13,7 @@ __pycache__/
 # Local-only backbone benchmark — not published to GitHub
 /baselines/
 
+# ISIC external-cohort eval: script tracked; outputs go to phd_data/isic_eval/ (outside repo)
+
 # Local environment notes
 /environment_setup.txt

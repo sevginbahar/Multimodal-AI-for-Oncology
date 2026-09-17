@@ -51,6 +51,7 @@ from config import (
     BATCH_SIZE, NUM_WORKERS, N_FOLDS, RANDOM_SEED,
     LOGREG_C, LOGREG_MAX_ITER,
     MORPH_KERNEL_SIZE, MIN_LESION_RATIO, CROP_MARGIN,
+    SEGMENTATION_BACKEND,
 )
 
 
@@ -134,21 +135,27 @@ def stage_prepare():
 
 
 def stage_segment():
-    """Segment lesions: LAB colour space + Otsu + morphological closing."""
+    """Segment lesions — backend chosen by config.SEGMENTATION_BACKEND."""
     sys.path.insert(0, str(PIPELINE_DIR / "panderm"))
-    from segment_lesions import ColorBasedSegmenter, process_dataset, generate_qc_montage
+    from segment_lesions import build_segmenter, process_dataset, generate_qc_montage
 
     manifest_csv = OUTPUT_DIR / "dataset_manifest.csv"
     if not manifest_csv.exists():
         raise FileNotFoundError(f"Run 'prepare' first — not found: {manifest_csv}")
 
-    segmenter = ColorBasedSegmenter(MORPH_KERNEL_SIZE, MIN_LESION_RATIO)
+    # Keyed by backend so switching SEGMENTATION_BACKEND never silently reuses
+    # another backend's cached output at the same path.
+    backend_dir = SEGMENTED_DIR / SEGMENTATION_BACKEND
+    print(f"Segmentation backend: {SEGMENTATION_BACKEND}  ->  {backend_dir}")
+    segmenter = build_segmenter(SEGMENTATION_BACKEND)
     df = process_dataset(
-        manifest_csv, SEGMENTED_DIR, segmenter, IMAGE_SIZE, CROP_MARGIN
+        manifest_csv, backend_dir, segmenter, IMAGE_SIZE, CROP_MARGIN,
+        backend=SEGMENTATION_BACKEND,
     )
     df.to_csv(manifest_csv, index=False)
     print(f"Manifest updated with segmented_path: {manifest_csv}")
-    generate_qc_montage(df, segmenter, OUTPUT_DIR / "segmentation_qc_montage.png")
+    generate_qc_montage(df, segmenter,
+                        OUTPUT_DIR / f"segmentation_qc_montage_{SEGMENTATION_BACKEND}.png")
 
 
 def stage_make_csv():

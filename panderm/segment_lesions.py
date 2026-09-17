@@ -44,6 +44,85 @@ class LesionSegmenter:
         raise NotImplementedError
 
 
+class SAMSegmenter(LesionSegmenter):
+    """
+    SAM2, prompted with a centre point — dermoscopy lesions are
+    conventionally centred in the frame. The deep-learning segmenter in the
+    ablation, compared against ColorBasedSegmenter (classical Otsu).
+
+    Requires the OFFICIAL Meta package (not the generic PyPI "sam2" name,
+    which resolves to an unrelated third-party repackaging and can drag in
+    an unpinned torch that silently replaces your CUDA build with a CPU-only
+    one — hit this exact problem once already):
+        pip install "git+https://github.com/facebookresearch/sam2.git"
+
+    Checkpoint auto-downloads from HuggingFace Hub on first use — no manual
+    .pth management needed. Uses multimask_output + picks SAM's own
+    highest-confidence mask, since a single point prompt is ambiguous
+    (could mean "the lesion", "the whole framed circle", etc.).
+
+    UNTESTED against a real sam2 install as of writing — the exact
+    `SAM2ImagePredictor` API can drift between package versions. Smoke-test
+    this on one real image before trusting it on the dataset.
+    """
+
+    def __init__(self, model_id: str = "facebook/sam2.1-hiera-small"):
+        try:
+            import torch
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+        except ImportError as e:
+            raise NotImplementedError(
+                "sam2 package not installed. Run:\n"
+                '  pip install "git+https://github.com/facebookresearch/sam2.git"\n'
+                f"(import error: {e})"
+            )
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.predictor = SAM2ImagePredictor.from_pretrained(model_id)
+        self.predictor.model.to(self.device)
+
+    def segment(self, image: np.ndarray) -> np.ndarray:
+        h, w = image.shape[:2]
+        self.predictor.set_image(image)
+        point = np.array([[w // 2, h // 2]])   # centre-point prompt
+        label = np.array([1])                  # foreground
+        masks, scores, _ = self.predictor.predict(
+            point_coords=point, point_labels=label, multimask_output=True
+        )
+        best = masks[int(np.argmax(scores))]
+        return best.astype(np.uint8)
+
+
+class IdentitySegmenter(LesionSegmenter):
+    """
+    The "none" arm of the segmentation ablation — keeps the full frame,
+    no cropping. Included for interface symmetry; process_dataset() actually
+    fast-paths "none" (segmented_path = image_path, no image processing at
+    all) rather than routing through this + apply_mask_and_crop, to exactly
+    reproduce the prior no-segmentation runs (avoids a redundant resize).
+    """
+
+    def segment(self, image: np.ndarray) -> np.ndarray:
+        return np.ones(image.shape[:2], dtype=np.uint8)
+
+
+def build_segmenter(backend: str) -> "LesionSegmenter | None":
+    """
+    Factory keyed off config.SEGMENTATION_BACKEND. Returns None for "none"
+    (process_dataset fast-paths that case and never calls .segment()).
+    """
+    from config import MORPH_KERNEL_SIZE, MIN_LESION_RATIO
+
+    backend = backend.lower()
+    if backend == "none":
+        return None
+    if backend == "color":
+        return ColorBasedSegmenter(MORPH_KERNEL_SIZE, MIN_LESION_RATIO)
+    if backend == "sam":
+        return SAMSegmenter()
+    raise ValueError(f"Unknown SEGMENTATION_BACKEND: {backend!r} "
+                     f"(expected 'none', 'color', or 'sam')")
+
+
 class ColorBasedSegmenter(LesionSegmenter):
     """
     Simple color-based segmentation using LAB color space + Otsu thresholding.
@@ -170,19 +249,33 @@ def apply_mask_and_crop(
 def process_dataset(
     manifest_csv: Path,
     output_dir: Path,
-    segmenter: LesionSegmenter = None,
+    segmenter: "LesionSegmenter | None" = None,
     target_size: int = 224,
     margin: float = 0.1,
+    backend: str = "color",
 ) -> pd.DataFrame:
     """
     Process all images: segment, crop, save.
 
+    backend="none" fast-paths to segmented_path == image_path — no image
+    processing at all — to exactly reproduce a true no-segmentation run,
+    rather than routing a full (all-ones) mask through the crop/resize
+    machinery, which would apply a redundant extra resize on top of
+    extract_features.py's own Resize/CenterCrop.
+
     Returns updated DataFrame with 'segmented_path' column.
     """
+    df = pd.read_csv(manifest_csv)
+
+    if backend == "none":
+        df["segmented_path"] = df["image_path"]
+        print(f"\nSegmentation backend = 'none': segmented_path = image_path "
+              f"for all {len(df)} images (no image processing, no fallbacks).")
+        return df
+
     if segmenter is None:
         segmenter = ColorBasedSegmenter()
 
-    df = pd.read_csv(manifest_csv)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     segmented_paths = []
@@ -237,15 +330,20 @@ def process_dataset(
 
 def generate_qc_montage(
     manifest_df: pd.DataFrame,
-    segmenter: LesionSegmenter,
+    segmenter: "LesionSegmenter | None",
     output_path: Path,
     n_samples: int = 20,
     seed: int = 42,
 ):
     """
     Generate a visual QC montage showing: original | mask overlay | cropped
-    for a random sample of images.
+    for a random sample of images. No-op for backend="none" (segmenter=None)
+    — nothing to visualize when nothing is being segmented.
     """
+    if segmenter is None:
+        print("  Segmenter is None (backend='none') — skipping QC montage.")
+        return
+
     rng = np.random.RandomState(seed)
     sample_idx = rng.choice(len(manifest_df), size=min(n_samples, len(manifest_df)), replace=False)
     sample_idx.sort()
@@ -294,6 +392,7 @@ def generate_qc_montage(
 
 def main():
     print("Step 2: Lesion segmentation preprocessing")
+    from config import SEGMENTATION_BACKEND
 
     manifest_csv = OUTPUT_DIR / "dataset_manifest.csv"
     if not manifest_csv.exists():
@@ -301,14 +400,15 @@ def main():
         print("Run prepare_data.py first.")
         return
 
-    segmenter = ColorBasedSegmenter(
-        morph_kernel_size=MORPH_KERNEL_SIZE,
-        min_lesion_ratio=MIN_LESION_RATIO,
-    )
+    # Same backend selection + per-backend output dir as run_pipeline.py's
+    # stage_segment(), so running this file directly behaves identically.
+    segmenter = build_segmenter(SEGMENTATION_BACKEND)
+    backend_dir = SEGMENTED_DIR / SEGMENTATION_BACKEND
 
-    # Process dataset
-    print(f"\nProcessing images (saving to {SEGMENTED_DIR})...")
-    df = process_dataset(manifest_csv, SEGMENTED_DIR, segmenter, IMAGE_SIZE, CROP_MARGIN)
+    print(f"Segmentation backend: {SEGMENTATION_BACKEND}")
+    print(f"\nProcessing images (saving to {backend_dir})...")
+    df = process_dataset(manifest_csv, backend_dir, segmenter, IMAGE_SIZE, CROP_MARGIN,
+                         backend=SEGMENTATION_BACKEND)
 
     # Save updated manifest
     updated_csv = OUTPUT_DIR / "dataset_manifest.csv"
@@ -316,7 +416,7 @@ def main():
     print(f"Updated manifest saved to: {updated_csv}")
 
     # Generate QC montage
-    qc_path = OUTPUT_DIR / "segmentation_qc_montage.png"
+    qc_path = OUTPUT_DIR / f"segmentation_qc_montage_{SEGMENTATION_BACKEND}.png"
     print(f"\nGenerating QC montage...")
     generate_qc_montage(df, segmenter, qc_path)
 

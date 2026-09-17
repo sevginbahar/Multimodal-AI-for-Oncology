@@ -30,7 +30,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune")
 args, _ = parser.parse_known_args()
 MODE_LABEL  = "Fine-Tuned" if args.mode == "finetune" else "Frozen"
-RESULTS_CSV = f"kfold_results_{args.mode}.csv"
 import torch
 import torchvision.transforms as transforms
 from pathlib import Path
@@ -54,12 +53,20 @@ from sklearn.preprocessing import label_binarize
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
     PANDERM_CLASS, CHECKPOINT_LARGE,
-    OUTPUT_DIR, FEATURES_DIR,
+    OUTPUT_DIR, FEATURES_DIR, EVAL_DIR, SEGMENTATION_BACKEND,
     CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
     IMAGENET_MEAN, IMAGENET_STD,
     NB_CLASSES, N_FOLDS,
     LOGREG_C, LOGREG_MAX_ITER,
 )
+
+# EVAL_DIR = OUTPUT_DIR/results/<SEGMENTATION_BACKEND>/ — a real subfolder per
+# backend, same pattern as segmented_cache/<backend>/ and features/<backend>/,
+# so none/color/sam results can never collide. TAG only needs the mode now;
+# the backend is the directory.
+EVAL_DIR.mkdir(parents=True, exist_ok=True)
+TAG = args.mode
+RESULTS_CSV = f"kfold_results_{TAG}.csv"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
@@ -189,13 +196,13 @@ def save_results(fold_results, agg):
             row[f"{cls}_f1"]  = r["per_class_f1"][cls]
             row[f"{cls}_auc"] = r["per_class_auc"][cls]
         rows.append(row)
-    pd.DataFrame(rows).to_csv(OUTPUT_DIR / RESULTS_CSV, index=False)
+    pd.DataFrame(rows).to_csv(EVAL_DIR / RESULTS_CSV, index=False)
     for r in fold_results:
-        (OUTPUT_DIR / f"fold_{r['fold']}_report.txt").write_text(
+        (EVAL_DIR / f"fold_{r['fold']}_report.txt").write_text(
             f"Fold {r['fold']} — train={r['n_train']} test={r['n_test']}\n\n"
             + r["report_text"]
         )
-    print(f"\nResults saved to: {OUTPUT_DIR}")
+    print(f"\nResults saved to: {EVAL_DIR}")
 
 
 # ── Plots ─────────────────────────────────────────────────────────────────
@@ -417,7 +424,7 @@ def generate_attention_maps(manifest: pd.DataFrame, model: torch.nn.Module,
 
     plt.suptitle(f"PanDerm Attention Maps ({MODE_LABEL})", fontsize=14, fontweight="bold")
     plt.tight_layout()
-    out_path = output_dir / f"attention_map_examples_{args.mode}.png"
+    out_path = output_dir / f"attention_map_examples_{TAG}.png"
     plt.savefig(str(out_path), dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved: {out_path}")
@@ -447,21 +454,21 @@ def main():
     agg = print_summary(fold_results)
     save_results(fold_results, agg)
 
-    # Plots
+    # Plots — saved into EVAL_DIR (results/<backend>/), filenames tagged with mode
     print("\nGenerating plots...")
-    plot_confusion_matrix(fold_results,   OUTPUT_DIR / "confusion_matrix_aggregate.png")
-    plot_roc_curves(fold_results,         OUTPUT_DIR / "roc_curves_mean.png")
-    plot_fold_accuracy_bars(fold_results, OUTPUT_DIR / "fold_accuracy_bars.png")
-    plot_umap(OUTPUT_DIR / "umap_patient_features.png")
+    plot_confusion_matrix(fold_results,   EVAL_DIR / f"confusion_matrix_aggregate_{TAG}.png")
+    plot_roc_curves(fold_results,         EVAL_DIR / f"roc_curves_mean_{TAG}.png")
+    plot_fold_accuracy_bars(fold_results, EVAL_DIR / f"fold_accuracy_bars_{TAG}.png")
+    plot_umap(EVAL_DIR / f"umap_patient_features_{TAG}.png")
 
-    # Attention maps — load fold 0 checkpoint
+    # Attention maps — load fold 0 checkpoint (manifest itself stays shared/read-only)
     print("\nGenerating attention maps (fold 0)...")
     try:
         manifest = pd.read_csv(OUTPUT_DIR / "dataset_manifest.csv")
         manifest["input_image"] = manifest["segmented_path"]
         ckpt_path  = find_best_checkpoint(OUTPUT_DIR / "results_fold0")
         attn_model = load_panderm_encoder(ckpt_path)
-        generate_attention_maps(manifest, attn_model, OUTPUT_DIR, n_per_class=3)
+        generate_attention_maps(manifest, attn_model, EVAL_DIR, n_per_class=3)
         del attn_model; torch.cuda.empty_cache()
     except Exception as e:
         print(f"  Attention maps failed: {e}")

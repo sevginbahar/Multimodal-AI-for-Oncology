@@ -1,0 +1,5 @@
+cd "C:\Users\phd_data"
+isic user login
+isic image download --% --search "diagnosis_4:\"Nevus, Atypical, Dysplastic, or Clark\" AND image_type:dermoscopic AND diagnosis_confirm_type:histopathology" isic\dn
+isic image download --% --search "diagnosis_3:\"Melanoma in situ\" AND image_type:dermoscopic AND diagnosis_confirm_type:histopathology" isic\mis
+isic image download --% --search "diagnosis_3:\"Melanoma Invasive\" AND mel_thick_mm:[0 TO 1] AND image_type:dermoscopic AND diagnosis_confirm_type:histopathology" isic\mia
