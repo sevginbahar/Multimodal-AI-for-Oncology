@@ -27,11 +27,11 @@ Class rename + the one filter not covered by the download query:
                   (mel_ulcer was not part of the download search)
 
 Usage:
-    python isic_eval/build_isic_pipeline_layout.py                    # everything, unbalanced
-    python isic_eval/build_isic_pipeline_layout.py --balance          # cap every class to the smallest class's group count
-    python isic_eval/build_isic_pipeline_layout.py --balance-n 168    # cap every class to N groups
-    python isic_eval/build_isic_pipeline_layout.py --mia-thick-max 0.8  # strict Stage IA instead of all-T1
-    python isic_eval/build_isic_pipeline_layout.py --clean             # wipe & rebuild
+    python panderm/restructure_isic_data.py                    # everything, unbalanced
+    python panderm/restructure_isic_data.py --balance          # cap every class to the smallest class's group count
+    python panderm/restructure_isic_data.py --balance-n 168    # cap every class to N groups
+    python panderm/restructure_isic_data.py --mia-thick-max 0.8  # strict Stage IA instead of all-T1
+    python panderm/restructure_isic_data.py --clean             # wipe & rebuild
 
 Then:
     (edit config.py to the ISIC path block, or set $env:DATASET if using that variant)

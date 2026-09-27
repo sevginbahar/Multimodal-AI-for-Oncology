@@ -60,13 +60,15 @@ from config import (
     LOGREG_C, LOGREG_MAX_ITER,
 )
 
-# EVAL_DIR = OUTPUT_DIR/results/<SEGMENTATION_BACKEND>/ — a real subfolder per
-# backend, same pattern as segmented_cache/<backend>/ and features/<backend>/,
-# so none/color/sam results can never collide. TAG only needs the mode now;
-# the backend is the directory.
-EVAL_DIR.mkdir(parents=True, exist_ok=True)
 TAG = args.mode
 RESULTS_CSV = f"kfold_results_{TAG}.csv"
+
+# Mode first, then backend — matches extract_features.py's layout exactly:
+# results/<mode>/<backend>/, features/<mode>/<backend>/, checkpoints/<mode>/<backend>/.
+EVAL_DIR       = OUTPUT_DIR / "results" / TAG / SEGMENTATION_BACKEND
+FEATURES_DIR   = OUTPUT_DIR / "features" / TAG / SEGMENTATION_BACKEND
+CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints" / TAG / SEGMENTATION_BACKEND
+EVAL_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
@@ -198,7 +200,7 @@ def save_results(fold_results, agg):
         rows.append(row)
     pd.DataFrame(rows).to_csv(EVAL_DIR / RESULTS_CSV, index=False)
     for r in fold_results:
-        (EVAL_DIR / f"fold_{r['fold']}_report.txt").write_text(
+        (EVAL_DIR / f"fold_{r['fold']}_report_{TAG}.txt").write_text(
             f"Fold {r['fold']} — train={r['n_train']} test={r['n_test']}\n\n"
             + r["report_text"]
         )
@@ -466,7 +468,7 @@ def main():
     try:
         manifest = pd.read_csv(OUTPUT_DIR / "dataset_manifest.csv")
         manifest["input_image"] = manifest["segmented_path"]
-        ckpt_path  = find_best_checkpoint(OUTPUT_DIR / "results_fold0")
+        ckpt_path  = find_best_checkpoint(CHECKPOINT_DIR / "results_fold0")
         attn_model = load_panderm_encoder(ckpt_path)
         generate_attention_maps(manifest, attn_model, EVAL_DIR, n_per_class=3)
         del attn_model; torch.cuda.empty_cache()

@@ -20,9 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
-    OUTPUT_DIR, SEGMENTED_DIR, DATA_ROOT,
+    OUTPUT_DIR, SEGMENTED_DIR, DATA_ROOT, SEGMENTATION_BACKEND,
     CSV_DIR, N_FOLDS,
 )
+
+# Nested by backend — otherwise building the CSV for "color" silently
+# overwrites "none"'s CSV at the same path, and a forgotten rebuild before
+# switching backends would train on stale data without any error.
+CSV_DIR = CSV_DIR / SEGMENTATION_BACKEND
 
 
 def main():

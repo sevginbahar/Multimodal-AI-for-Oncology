@@ -105,7 +105,7 @@ def run_stage(name: str, func, skip_check=None, skip_existing: bool = False):
     t0 = time.time()
     func()
     elapsed = time.time() - t0
-    print(f"\n  ✓ Completed in {int(elapsed // 60)}m {elapsed % 60:.1f}s")
+    print(f"\n  Completed in {int(elapsed // 60)}m {elapsed % 60:.1f}s")
 
 
 # ── Stages ────────────────────────────────────────────────────────────────

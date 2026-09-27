@@ -32,7 +32,7 @@ from collections import OrderedDict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
     PANDERM_CLASS, CHECKPOINT_LARGE,
-    DATA_ROOT, SEGMENTED_DIR, OUTPUT_DIR, FEATURES_DIR,
+    DATA_ROOT, SEGMENTED_DIR, OUTPUT_DIR, FEATURES_DIR, SEGMENTATION_BACKEND,
     CLASS_LABELS, IMAGENET_MEAN, IMAGENET_STD,
     NB_CLASSES, BATCH_SIZE, NUM_WORKERS, N_FOLDS,
 )
@@ -42,6 +42,11 @@ parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune"
 args, _ = parser.parse_known_args()
 USE_FROZEN = args.mode == "frozen"
 
+# Mode first, then backend — results/<mode>/<backend>/, features/<mode>/<backend>/,
+# checkpoints/<mode>/<backend>/ all follow the same layout, so frozen and finetune
+# runs on the SAME backend can never share a path and silently overwrite each other.
+FEATURES_DIR   = OUTPUT_DIR / "features" / args.mode / SEGMENTATION_BACKEND
+CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints" / args.mode / SEGMENTATION_BACKEND
 FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
@@ -187,7 +192,7 @@ def main():
                 print(f"Fold {fold_idx}: cached — skipping extraction")
                 continue
 
-            fold_dir = OUTPUT_DIR / f"results_fold{fold_idx}"
+            fold_dir = CHECKPOINT_DIR / f"results_fold{fold_idx}"
             try:
                 ckpt_path = find_best_checkpoint(fold_dir)
             except FileNotFoundError as e:

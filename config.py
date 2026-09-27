@@ -18,9 +18,9 @@ from pathlib import Path
 # ============================================================
 # Paths
 # ------------------------------------------------------------
-# To switch datasets: comment out the active block, uncomment the other.
-# The five paths (DATA_ROOT + the four output dirs) must move together, or
-# one dataset's run will overwrite the other's manifest / features / results.
+# To switch cohorts: comment out the active block, uncomment the other.
+# Each cohort has its own OUTPUT_DIR so one run can never overwrite the
+# other's manifest / features / results.
 # ============================================================
 
 
@@ -31,11 +31,16 @@ USE_SEGMENTATION  = True
 MORPH_KERNEL_SIZE = 15    # kernel for morphological closing
 MIN_LESION_RATIO  = 0.01  # fallback to full image if mask < 1% of area
 CROP_MARGIN       = 0.1   # 10% margin around lesion bounding box
-SEGMENTATION_BACKEND = "none"
+SEGMENTATION_BACKEND = "none"  # "none", "color", or "sam" (needs `pip install` — see segment_lesions.py)
 
-# --- Dermoscopy Cohort ---
-DATA_ROOT     = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\isic_pipeline\\dermoscopy")
-OUTPUT_DIR    = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\isic_pipeline\\outputs")
+# --- ISIC cohort ---
+# DATA_ROOT  = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\isic_pipeline\\dermoscopy")
+# OUTPUT_DIR = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\isic_pipeline\\outputs")
+
+# --- In-house cohort ---
+DATA_ROOT  = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\dermoscopy\\dermoscopy")
+OUTPUT_DIR = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\inhouse_pipeline\\outputs")
+
 SEGMENTED_DIR = OUTPUT_DIR / "segmented_cache"
 FEATURES_DIR  = OUTPUT_DIR / "features" / SEGMENTATION_BACKEND
 EVAL_DIR      = OUTPUT_DIR / "results" / SEGMENTATION_BACKEND
