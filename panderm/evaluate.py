@@ -1,15 +1,26 @@
 """
 PanDerm K-Fold Evaluation
 ==========================
-Reads patient-level features saved by extract_features.py and runs
-logistic regression classification, then generates all plots.
+  --mode maskguided : same as frozen, on features from extract_features_maskguided.py
+                    (features/maskguided/<backend>/ -> results/maskguided/<backend>/)
+  --mode frozen   : patient-level features from extract_features.py ->
+                    logistic regression per fold -> metrics + plots.
+  --mode finetune : test_predictions_fold{i}.csv written by
+                    panderm_finetuning.py (each fold's own head on its own
+                    test patients) -> metrics + plots. No logistic regression:
+                    fitting one on features of images the backbone was
+                    fine-tuned on would not transfer to unseen test patients.
 
-Requires CPU only. Run after extract_features.py.
+Both modes go through the same compute_metrics(), so their numbers are
+directly comparable.
 
 Usage:
-    python evaluate.py
+    python evaluate.py --mode frozen
+    python evaluate.py --mode maskguided
+    python evaluate.py --mode meanall       (plain patch-token mean, backend "none")
+    python evaluate.py --mode finetune
 
-Outputs (saved to OUTPUT_DIR):
+Outputs (saved to EVAL_DIR):
     kfold_results_finetuned.csv
     fold_{i}_report.txt
     confusion_matrix_aggregate.png
@@ -27,9 +38,13 @@ import pandas as pd
 from scipy import stats
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune")
+parser.add_argument("--mode", choices=["finetune", "frozen", "maskguided", "meanall"], default="finetune")
 args, _ = parser.parse_known_args()
-MODE_LABEL  = "Fine-Tuned" if args.mode == "finetune" else "Frozen"
+MODE_LABEL  = {"finetune": "Fine-Tuned", "frozen": "Frozen",
+               "maskguided": "Mask-Guided Frozen", "meanall": "Patch-Mean Frozen"}[args.mode]
+# frozen, maskguided and meanall all classify patient features with logistic
+# regression; they differ only in which features extract_features*.py wrote.
+USES_FEATURES = args.mode in ("frozen", "maskguided", "meanall")
 import torch
 import torchvision.transforms as transforms
 from pathlib import Path
@@ -57,7 +72,7 @@ from config import (
     CLASS_NAMES, CLASS_LABELS, DISPLAY_NAMES,
     IMAGENET_MEAN, IMAGENET_STD,
     NB_CLASSES, N_FOLDS,
-    LOGREG_C, LOGREG_MAX_ITER,
+    LOGREG_C, LOGREG_MAX_ITER, input_image,
 )
 
 TAG = args.mode
@@ -74,7 +89,70 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 COLORS = ["#1565c0", "#d32f2f", "#6a1b9a"]
 
 
-# ── Logistic regression evaluation ───────────────────────────────────────
+# ── Metrics (shared by both modes) ────────────────────────────────────────
+
+def compute_metrics(y_te, y_pred, y_proba) -> dict:
+    y_bin  = label_binarize(y_te, classes=[0, 1, 2])
+    report = classification_report(y_te, y_pred, target_names=CLASS_NAMES,
+                                   output_dict=True, zero_division=0)
+    try:    macro_auc = roc_auc_score(y_bin, y_proba, average="macro", multi_class="ovr")
+    except: macro_auc = float("nan")
+
+    per_class_auc = {}
+    for ci, cls in enumerate(CLASS_NAMES):
+        try:    per_class_auc[cls] = roc_auc_score(y_bin[:, ci], y_proba[:, ci])
+        except: per_class_auc[cls] = float("nan")
+
+    return {
+        "balanced_accuracy":   balanced_accuracy_score(y_te, y_pred),
+        "accuracy":            accuracy_score(y_te, y_pred),
+        "macro_auc":           macro_auc,
+        "cohen_kappa":         cohen_kappa_score(y_te, y_pred),
+        "macro_f1":            report["macro avg"]["f1-score"],
+        "per_class_auc":       per_class_auc,
+        "per_class_f1":        {c: report[c]["f1-score"]  for c in CLASS_NAMES},
+        "per_class_precision": {c: report[c]["precision"] for c in CLASS_NAMES},
+        "per_class_recall":    {c: report[c]["recall"]    for c in CLASS_NAMES},
+        "confusion_matrix":    confusion_matrix(y_te, y_pred, labels=[0, 1, 2]),
+        "y_test":  y_te,
+        "y_pred":  y_pred,
+        "y_proba": y_proba,
+        "report_text": classification_report(y_te, y_pred,
+                                              target_names=CLASS_NAMES, zero_division=0),
+    }
+
+
+def print_fold(r: dict) -> None:
+    c = f"C={r['best_c']}  " if r["best_c"] is not None else ""
+    n_train = f"train={r['n_train']}, " if r["n_train"] is not None else ""
+    print(f"  Fold {r['fold']+1}: BalAcc={r['balanced_accuracy']:.3f}  "
+          f"AUC={r['macro_auc']:.3f}  F1={r['macro_f1']:.3f}  "
+          f"{c}({n_train}test={r['n_test']})")
+
+
+# ── Fine-tuned: the model's own head on each fold's test patients ─────────
+
+def run_finetune_evaluation():
+    prob_cols = [f"prob_{c}" for c in CLASS_NAMES]
+    fold_results = []
+    for fold_idx in range(N_FOLDS):
+        pred_path = CHECKPOINT_DIR / f"results_fold{fold_idx}" / f"test_predictions_fold{fold_idx}.csv"
+        if not pred_path.exists():
+            print(f"  Fold {fold_idx}: {pred_path.name} missing — run panderm_finetuning.py "
+                  f"(add --eval-only for existing checkpoints)")
+            continue
+        df = pd.read_csv(pred_path)
+        y_te    = df["true_label"].to_numpy()
+        y_proba = df[prob_cols].to_numpy()
+        result = {"fold": fold_idx, "best_c": None, "n_train": None, "n_test": len(df),
+                  "group_ids": df["group_id"].tolist(),
+                  **compute_metrics(y_te, y_proba.argmax(axis=1), y_proba)}
+        fold_results.append(result)
+        print_fold(result)
+    return fold_results
+
+
+# ── Frozen: logistic regression on pretrained features ────────────────────
 
 def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
     fold_results = []
@@ -104,41 +182,12 @@ def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
         y_pred  = clf.predict(X_te)
         y_proba = clf.predict_proba(X_te)
 
-        y_bin  = label_binarize(y_te, classes=[0, 1, 2])
-        report = classification_report(y_te, y_pred, target_names=CLASS_NAMES,
-                                       output_dict=True, zero_division=0)
-        try:    macro_auc = roc_auc_score(y_bin, y_proba, average="macro", multi_class="ovr")
-        except: macro_auc = float("nan")
-
-        per_class_auc = {}
-        for ci, cls in enumerate(CLASS_NAMES):
-            try:    per_class_auc[cls] = roc_auc_score(y_bin[:, ci], y_proba[:, ci])
-            except: per_class_auc[cls] = float("nan")
-
-        result = {
-            "fold":                fold_idx,
-            "best_c":              best_c,
-            "balanced_accuracy":   balanced_accuracy_score(y_te, y_pred),
-            "accuracy":            accuracy_score(y_te, y_pred),
-            "macro_auc":           macro_auc,
-            "cohen_kappa":         cohen_kappa_score(y_te, y_pred),
-            "macro_f1":            report["macro avg"]["f1-score"],
-            "per_class_auc":       per_class_auc,
-            "per_class_f1":        {c: report[c]["f1-score"]  for c in CLASS_NAMES},
-            "per_class_precision": {c: report[c]["precision"] for c in CLASS_NAMES},
-            "per_class_recall":    {c: report[c]["recall"]    for c in CLASS_NAMES},
-            "confusion_matrix":    confusion_matrix(y_te, y_pred, labels=[0, 1, 2]),
-            "y_test":  y_te,
-            "y_proba": y_proba,
-            "n_train": int(train_mask.sum()),
-            "n_test":  int(test_mask.sum()),
-            "report_text": classification_report(y_te, y_pred,
-                                                  target_names=CLASS_NAMES, zero_division=0),
-        }
+        result = {"fold": fold_idx, "best_c": best_c,
+                  "n_train": int(train_mask.sum()), "n_test": int(test_mask.sum()),
+                  "group_ids": [g for g, t in zip(group_ids, test_mask) if t],
+                  **compute_metrics(y_te, y_pred, y_proba)}
         fold_results.append(result)
-        print(f"  Fold {fold_idx+1}: BalAcc={result['balanced_accuracy']:.3f}  "
-              f"AUC={macro_auc:.3f}  F1={result['macro_f1']:.3f}  "
-              f"C={best_c}  (train={result['n_train']}, test={result['n_test']})")
+        print_fold(result)
 
     return fold_results
 
@@ -184,7 +233,23 @@ def print_summary(fold_results):
         f1 = f"{agg[f'{cls}_f1_mean']:.3f}±{agg[f'{cls}_f1_std']:.3f} [{f1_lo:.3f}–{f1_hi:.3f}]"
         au = f"{agg[f'{cls}_auc_mean']:.3f}±{agg[f'{cls}_auc_std']:.3f} [{au_lo:.3f}–{au_hi:.3f}]"
         print(f"  {DISPLAY_NAMES[cls]:<22} {f1:>26} {au:>26}")
+
+    # Pooled: every test patient once, predicted by the fold model that never
+    # trained on them — one set of metrics over all patients together.
+    pooled = compute_metrics(np.concatenate([r["y_test"]  for r in fold_results]),
+                             np.concatenate([r["y_pred"]  for r in fold_results]),
+                             np.concatenate([r["y_proba"] for r in fold_results]))
+    print(f"\n  Pooled over all {len(pooled['y_test'])} test patients:")
+    print(f"  BalAcc={pooled['balanced_accuracy']:.3f}  Acc={pooled['accuracy']:.3f}  "
+          f"AUC={pooled['macro_auc']:.3f}  F1={pooled['macro_f1']:.3f}  "
+          f"Kappa={pooled['cohen_kappa']:.3f}")
+    print(f"\n  {'Class':<22} {'Precision':>10} {'Recall':>10} {'F1':>10} {'AUC':>10}")
+    for cls in CLASS_NAMES:
+        print(f"  {DISPLAY_NAMES[cls]:<22} {pooled['per_class_precision'][cls]:>10.3f} "
+              f"{pooled['per_class_recall'][cls]:>10.3f} {pooled['per_class_f1'][cls]:>10.3f} "
+              f"{pooled['per_class_auc'][cls]:>10.3f}")
     print("="*75)
+    agg["pooled"] = pooled
     return agg
 
 
@@ -195,16 +260,53 @@ def save_results(fold_results, agg):
                                    "macro_auc", "macro_f1", "cohen_kappa",
                                    "n_train", "n_test"]}
         for cls in CLASS_NAMES:
-            row[f"{cls}_f1"]  = r["per_class_f1"][cls]
-            row[f"{cls}_auc"] = r["per_class_auc"][cls]
+            for mt in ["precision", "recall", "f1", "auc"]:
+                row[f"{cls}_{mt}"] = r[f"per_class_{mt}"][cls]
         rows.append(row)
     pd.DataFrame(rows).to_csv(EVAL_DIR / RESULTS_CSV, index=False)
+
+    # One row per test patient (each patient appears once, in its test fold) —
+    # used by segmentation_stats.py to relate errors to artifacts / fallbacks.
+    pd.DataFrame([{"fold": r["fold"], "group_id": g, "true_label": int(t), "pred_label": int(p),
+                   **{f"prob_{c}": float(pr[ci]) for ci, c in enumerate(CLASS_NAMES)}}
+                  for r in fold_results
+                  for g, t, p, pr in zip(r["group_ids"], r["y_test"], r["y_pred"], r["y_proba"])]
+                 ).to_csv(EVAL_DIR / f"patient_predictions_{TAG}.csv", index=False)
+
+    # Overall summary: mean ± SD and 95% CI across folds, plus pooled over all patients
+    pooled = agg["pooled"]
+    summary = []
+    for key in ["balanced_accuracy", "accuracy", "macro_auc", "macro_f1", "cohen_kappa"]:
+        lo, hi = agg[f"{key}_ci"]
+        summary.append({"class": "overall", "metric": key, "fold_mean": agg[f"{key}_mean"],
+                        "fold_std": agg[f"{key}_std"], "ci95_low": lo, "ci95_high": hi,
+                        "pooled": pooled[key]})
+    for cls in CLASS_NAMES:
+        for mt in ["precision", "recall", "f1", "auc"]:
+            lo, hi = agg[f"{cls}_{mt}_ci"]
+            summary.append({"class": cls, "metric": mt, "fold_mean": agg[f"{cls}_{mt}_mean"],
+                            "fold_std": agg[f"{cls}_{mt}_std"], "ci95_low": lo, "ci95_high": hi,
+                            "pooled": pooled[f"per_class_{mt}"][cls]})
+    pd.DataFrame(summary).to_csv(EVAL_DIR / f"kfold_summary_{TAG}.csv", index=False)
+
     for r in fold_results:
+        n_train = f"train={r['n_train']} " if r["n_train"] is not None else ""
         (EVAL_DIR / f"fold_{r['fold']}_report_{TAG}.txt").write_text(
-            f"Fold {r['fold']} — train={r['n_train']} test={r['n_test']}\n\n"
+            f"Fold {r['fold']} — {n_train}test={r['n_test']} (patients)\n\n"
             + r["report_text"]
         )
+    cm = pooled["confusion_matrix"]
+    cm_text = "\n".join(f"  {CLASS_NAMES[i]:<8} " + "  ".join(f"{v:4d}" for v in cm[i])
+                        for i in range(len(CLASS_NAMES)))
+    (EVAL_DIR / f"pooled_report_{TAG}.txt").write_text(
+        f"Pooled over all {len(pooled['y_test'])} test patients (5 folds)\n\n"
+        + pooled["report_text"]
+        + f"\nConfusion matrix (rows = true, cols = predicted: {' '.join(CLASS_NAMES)})\n"
+        + cm_text + "\n"
+    )
     print(f"\nResults saved to: {EVAL_DIR}")
+    print(f"  {RESULTS_CSV} (per fold), kfold_summary_{TAG}.csv (overall + per class), "
+          f"pooled_report_{TAG}.txt")
 
 
 # ── Plots ─────────────────────────────────────────────────────────────────
@@ -422,7 +524,8 @@ def generate_attention_maps(manifest: pd.DataFrame, model: torch.nn.Module,
         axes[i, 0].imshow(orig);    axes[i, 0].set_title(f"Original — {true_label}", fontsize=9)
         axes[i, 1].imshow(overlay); axes[i, 1].set_title("Attention Map", fontsize=9)
         for ax in axes[i]: ax.axis("off")
-        print(f"  {os.path.basename(img_path)}")
+        # ascii(): filenames contain accents (e.g. "displàsic") that the Windows console can't encode
+        print(f"  {ascii(os.path.basename(img_path))}")
 
     plt.suptitle(f"PanDerm Attention Maps ({MODE_LABEL})", fontsize=14, fontweight="bold")
     plt.tight_layout()
@@ -435,24 +538,30 @@ def generate_attention_maps(manifest: pd.DataFrame, model: torch.nn.Module,
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
-    # Load saved patient labels and fold assignments
-    labels_path = FEATURES_DIR / "patient_labels.npy"
-    groups_path = FEATURES_DIR / "patient_group_ids.npy"
-    folds_path  = FEATURES_DIR / "group_fold_mapping.csv"
+    if args.mode == "finetune":
+        print(f"\nReading fine-tuned test predictions from {CHECKPOINT_DIR}")
+        fold_results = run_finetune_evaluation()
+    else:
+        # Load saved patient labels and fold assignments
+        labels_path = FEATURES_DIR / "patient_labels.npy"
+        groups_path = FEATURES_DIR / "patient_group_ids.npy"
+        folds_path  = FEATURES_DIR / "group_fold_mapping.csv"
 
-    if not all(p.exists() for p in [labels_path, groups_path, folds_path]):
-        raise FileNotFoundError(
-            "Features not found. Run extract_features.py first."
-        )
+        if not all(p.exists() for p in [labels_path, groups_path, folds_path]):
+            raise FileNotFoundError(
+                "Features not found. Run extract_features.py first."
+            )
 
-    patient_labels  = np.load(str(labels_path))
-    group_ids       = np.load(str(groups_path), allow_pickle=True).tolist()
-    fold_df         = pd.read_csv(folds_path)
-    fold_assignments = dict(zip(fold_df["group_id"], fold_df["fold"]))
+        patient_labels  = np.load(str(labels_path))
+        group_ids       = np.load(str(groups_path), allow_pickle=True).tolist()
+        fold_df         = pd.read_csv(folds_path)
+        fold_assignments = dict(zip(fold_df["group_id"], fold_df["fold"]))
 
-    # Evaluate
-    print(f"\nRunning {N_FOLDS}-fold logistic regression...")
-    fold_results = run_kfold_evaluation(patient_labels, group_ids, fold_assignments)
+        print(f"\nRunning {N_FOLDS}-fold logistic regression...")
+        fold_results = run_kfold_evaluation(patient_labels, group_ids, fold_assignments)
+
+    if not fold_results:
+        raise SystemExit("No folds to evaluate.")
     agg = print_summary(fold_results)
     save_results(fold_results, agg)
 
@@ -461,13 +570,14 @@ def main():
     plot_confusion_matrix(fold_results,   EVAL_DIR / f"confusion_matrix_aggregate_{TAG}.png")
     plot_roc_curves(fold_results,         EVAL_DIR / f"roc_curves_mean_{TAG}.png")
     plot_fold_accuracy_bars(fold_results, EVAL_DIR / f"fold_accuracy_bars_{TAG}.png")
-    plot_umap(EVAL_DIR / f"umap_patient_features_{TAG}.png")
+    if USES_FEATURES:   # fine-tuned mode has no shared feature file to embed
+        plot_umap(EVAL_DIR / f"umap_patient_features_{TAG}.png")
 
     # Attention maps — load fold 0 checkpoint (manifest itself stays shared/read-only)
     print("\nGenerating attention maps (fold 0)...")
     try:
         manifest = pd.read_csv(OUTPUT_DIR / "dataset_manifest.csv")
-        manifest["input_image"] = manifest["segmented_path"]
+        manifest["input_image"] = manifest["image_path"].map(input_image)
         ckpt_path  = find_best_checkpoint(CHECKPOINT_DIR / "results_fold0")
         attn_model = load_panderm_encoder(ckpt_path)
         generate_attention_maps(manifest, attn_model, EVAL_DIR, n_per_class=3)

@@ -1,10 +1,15 @@
 """
-PanDerm Feature Extraction — 5-Fold Cross-Validation
-=====================================================
-Loads fold-specific fine-tuned PanDerm checkpoints, extracts CLS token
-features for every image, aggregates to patient level, and saves to disk.
+PanDerm Feature Extraction — frozen backbone
+=============================================
+Runs the pretrained PanDerm checkpoint (unchanged weights) over every image,
+extracts CLS token features, aggregates to patient level, and saves to disk
+for evaluate.py --mode frozen.
 
-Requires GPU. Run this before evaluate.py.
+Frozen only. Fine-tuned models are evaluated with their own head on each
+fold's test patients (panderm_finetuning.py writes test_predictions_fold{i}.csv),
+not through features here.
+
+Requires GPU. Run this before evaluate.py --mode frozen.
 
 Usage:
     python extract_features.py
@@ -32,37 +37,24 @@ from collections import OrderedDict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
     PANDERM_CLASS, CHECKPOINT_LARGE,
-    DATA_ROOT, SEGMENTED_DIR, OUTPUT_DIR, FEATURES_DIR, SEGMENTATION_BACKEND,
+    OUTPUT_DIR, SEGMENTATION_BACKEND,
     CLASS_LABELS, IMAGENET_MEAN, IMAGENET_STD,
-    NB_CLASSES, BATCH_SIZE, NUM_WORKERS, N_FOLDS,
+    NB_CLASSES, BATCH_SIZE, NUM_WORKERS, N_FOLDS, input_image,
 )
 
+# --mode is kept so existing commands keep working; only "frozen" is valid now.
 parser = argparse.ArgumentParser()
-parser.add_argument("--mode", choices=["finetune", "frozen"], default="finetune")
+parser.add_argument("--mode", choices=["frozen"], default="frozen")
 args, _ = parser.parse_known_args()
-USE_FROZEN = args.mode == "frozen"
 
-# Mode first, then backend — results/<mode>/<backend>/, features/<mode>/<backend>/,
-# checkpoints/<mode>/<backend>/ all follow the same layout, so frozen and finetune
-# runs on the SAME backend can never share a path and silently overwrite each other.
-FEATURES_DIR   = OUTPUT_DIR / "features" / args.mode / SEGMENTATION_BACKEND
-CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints" / args.mode / SEGMENTATION_BACKEND
+# Mode first, then backend — results/<mode>/<backend>/, features/<mode>/<backend>/.
+FEATURES_DIR = OUTPUT_DIR / "features" / "frozen" / SEGMENTATION_BACKEND
 FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
 
 
 # ── Model ─────────────────────────────────────────────────────────────────
-
-def find_best_checkpoint(fold_dir: Path) -> Path:
-    for name in ["checkpoint-best.pth", "best.pth"]:
-        p = fold_dir / name
-        if p.exists(): return p
-    ckpts = sorted(fold_dir.glob("checkpoint-*.pth"),
-                   key=lambda p: int(p.stem.split("-")[-1]))
-    if ckpts: return ckpts[-1]
-    raise FileNotFoundError(f"No checkpoint found in {fold_dir}")
-
 
 def load_panderm_encoder(ckpt_path: Path) -> torch.nn.Module:
     for p in [str(PANDERM_CLASS.parent), str(PANDERM_CLASS)]:
@@ -121,19 +113,15 @@ def extract_features(model: torch.nn.Module, paths: list) -> np.ndarray:
 def load_manifest() -> pd.DataFrame:
     manifest = pd.read_csv(OUTPUT_DIR / "dataset_manifest.csv")
 
-    cluster_prefix     = manifest["image_path"].iloc[0].rsplit("/dermoscopy", 1)[0]
-    cluster_seg_prefix = manifest["segmented_path"].iloc[0].rsplit("/segmented_cache", 1)[0]
-
-    manifest["image"] = manifest["image_path"].str.replace(
-        cluster_prefix + "/dermoscopy", str(DATA_ROOT), regex=False)
-    manifest["segmented_image"] = manifest["segmented_path"].str.replace(
-        cluster_seg_prefix + "/segmented_cache", str(SEGMENTED_DIR), regex=False)
-
-    manifest["input_image"] = manifest["segmented_image"]
+    # Raw image for "none", segmented_cache/<backend>/ crop otherwise — chosen
+    # from config, not the manifest's segmented_path (last backend segmented).
+    manifest["input_image"] = manifest["image_path"].map(input_image)
     missing = ~manifest["input_image"].apply(lambda p: Path(p).exists())
-    if missing.sum() > 0:
-        print(f"  {missing.sum()} segmented images missing — falling back to originals")
-        manifest.loc[missing, "input_image"] = manifest.loc[missing, "image"]
+    if missing.any():
+        raise FileNotFoundError(
+            f"{missing.sum()} images for backend '{SEGMENTATION_BACKEND}' not found, "
+            f"e.g. {manifest.loc[missing, 'input_image'].iloc[0]}")
+    print(f"  Backend '{SEGMENTATION_BACKEND}': e.g. {manifest['input_image'].iloc[0]}")
 
     if "label" not in manifest.columns:
         manifest["label"] = manifest["diagnosis"].map(CLASS_LABELS)
@@ -164,46 +152,26 @@ def aggregate_to_patient(features: np.ndarray, df: pd.DataFrame):
 def main():
     manifest = load_manifest()
 
-    # ── Per-fold image-level feature extraction ───────────────────────────
-    if USE_FROZEN:
-        # Extract once with pretrained checkpoint, reuse across all folds
-        print(f"\nFrozen mode: extracting with pretrained checkpoint")
-        print(f"  {CHECKPOINT_LARGE}")
-        shared_cache = FEATURES_DIR / "frozen_image_features.npy"
-        if shared_cache.exists():
-            print("  Cached — skipping extraction")
-            feats = np.load(str(shared_cache))
-        else:
-            model = load_panderm_encoder(CHECKPOINT_LARGE)
-            feats = extract_features(model, manifest["input_image"].tolist())
-            np.save(str(shared_cache), feats)
-            del model; torch.cuda.empty_cache()
-            print(f"  Saved {shared_cache.name}  {feats.shape}")
-
-        for fold_idx in range(N_FOLDS):
-            cache = FEATURES_DIR / f"fold{fold_idx}_image_features.npy"
-            if not cache.exists():
-                np.save(str(cache), feats)
-                print(f"  Fold {fold_idx}: linked frozen features")
+    # ── Image-level feature extraction ────────────────────────────────────
+    # Extract once with pretrained checkpoint, reuse across all folds
+    print(f"\nFrozen mode: extracting with pretrained checkpoint")
+    print(f"  {CHECKPOINT_LARGE}")
+    shared_cache = FEATURES_DIR / "frozen_image_features.npy"
+    if shared_cache.exists():
+        print("  Cached — skipping extraction")
+        feats = np.load(str(shared_cache))
     else:
-        for fold_idx in range(N_FOLDS):
-            cache = FEATURES_DIR / f"fold{fold_idx}_image_features.npy"
-            if cache.exists():
-                print(f"Fold {fold_idx}: cached — skipping extraction")
-                continue
+        model = load_panderm_encoder(CHECKPOINT_LARGE)
+        feats = extract_features(model, manifest["input_image"].tolist())
+        np.save(str(shared_cache), feats)
+        del model; torch.cuda.empty_cache()
+        print(f"  Saved {shared_cache.name}  {feats.shape}")
 
-            fold_dir = CHECKPOINT_DIR / f"results_fold{fold_idx}"
-            try:
-                ckpt_path = find_best_checkpoint(fold_dir)
-            except FileNotFoundError as e:
-                print(f"Fold {fold_idx}: {e} — skipping"); continue
-
-            print(f"\nFold {fold_idx}: loading {ckpt_path.name}")
-            model = load_panderm_encoder(ckpt_path)
-            feats = extract_features(model, manifest["input_image"].tolist())
+    for fold_idx in range(N_FOLDS):
+        cache = FEATURES_DIR / f"fold{fold_idx}_image_features.npy"
+        if not cache.exists():
             np.save(str(cache), feats)
-            del model; torch.cuda.empty_cache()
-            print(f"  Saved {cache.name}  {feats.shape}")
+            print(f"  Fold {fold_idx}: linked frozen features")
 
     # ── Aggregate to patient level ────────────────────────────────────────
     manifest["patient_id"] = manifest["patient_id"].astype(str)

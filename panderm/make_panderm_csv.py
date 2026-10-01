@@ -9,19 +9,20 @@ Fold-to-split mapping:
     val  fold  N+1 → val
     remaining  → train
 
+The image column follows config.SEGMENTATION_BACKEND: raw images for "none",
+segmented_cache/<backend>/ crops otherwise (see config.input_image).
+
 Usage:
     python make_panderm_csv.py
-    python make_panderm_csv.py --use-segmented   # use segmented image paths
 """
 import sys
-import argparse
 import pandas as pd
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
-    OUTPUT_DIR, SEGMENTED_DIR, DATA_ROOT, SEGMENTATION_BACKEND,
-    CSV_DIR, N_FOLDS,
+    OUTPUT_DIR, SEGMENTATION_BACKEND,
+    CSV_DIR, N_FOLDS, input_image,
 )
 
 # Nested by backend — otherwise building the CSV for "color" silently
@@ -31,11 +32,6 @@ CSV_DIR = CSV_DIR / SEGMENTATION_BACKEND
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--use-segmented", action="store_true",
-                        help="Use segmented image paths instead of raw")
-    args = parser.parse_args()
-
     manifest_path = OUTPUT_DIR / "dataset_manifest.csv"
     if not manifest_path.exists():
         raise FileNotFoundError(
@@ -44,6 +40,14 @@ def main():
         )
 
     df = pd.read_csv(manifest_path)
+    df["image"] = df["image_path"].map(input_image)
+    missing = ~df["image"].map(lambda p: Path(p).exists())
+    if missing.any():
+        raise FileNotFoundError(
+            f"{missing.sum()} of {len(df)} images for backend '{SEGMENTATION_BACKEND}' not found, "
+            f"e.g. {df.loc[missing, 'image'].iloc[0]}\n"
+            "Check DATA_ROOT in config.py, or run the segment stage for this backend.")
+    print(f"Backend '{SEGMENTATION_BACKEND}': e.g. {df['image'].iloc[0]}")
     CSV_DIR.mkdir(parents=True, exist_ok=True)
 
     for test_fold in range(N_FOLDS):
@@ -56,12 +60,6 @@ def main():
 
         fold_df = df.copy()
         fold_df["split"] = fold_df["fold"].apply(fold_to_split)
-
-        # Choose image column
-        if args.use_segmented and "segmented_path" in fold_df.columns:
-            fold_df["image"] = fold_df["segmented_path"]
-        else:
-            fold_df["image"] = fold_df["image_path"]
 
         panderm_df = fold_df[["image", "label", "split"]]
         out_path   = CSV_DIR / f"panderm_finetuning_fold{test_fold}.csv"

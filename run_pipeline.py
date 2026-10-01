@@ -159,80 +159,38 @@ def stage_segment():
 
 
 def stage_make_csv():
-    """Convert manifest to one PanDerm-format CSV per fold."""
-    import pandas as pd
+    """Convert manifest to one PanDerm-format CSV per fold (cross-fold-csv/<backend>/)."""
+    script = PIPELINE_DIR / "panderm" / "make_panderm_csv.py"
+    cmd = [sys.executable, str(script)]
+    print(f"Running: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
-    manifest_csv = OUTPUT_DIR / "dataset_manifest.csv"
-    if not manifest_csv.exists():
-        raise FileNotFoundError(f"Run 'prepare' first — not found: {manifest_csv}")
 
-    df = pd.read_csv(manifest_csv)
-    CSV_DIR.mkdir(parents=True, exist_ok=True)
-
-    for test_fold in range(N_FOLDS):
-        val_fold = (test_fold + 1) % N_FOLDS
-
-        def split_label(fold, tf=test_fold, vf=val_fold):
-            if fold == tf: return "test"
-            if fold == vf: return "val"
-            return "train"
-
-        fold_df = df.copy()
-        fold_df["image"] = (
-            fold_df["segmented_path"]
-            if "segmented_path" in fold_df.columns
-            else fold_df["image_path"]
-        )
-        fold_df["split"] = fold_df["fold"].apply(split_label)
-        out = CSV_DIR / f"panderm_finetuning_fold{test_fold}.csv"
-        fold_df[["image", "label", "split"]].to_csv(out, index=False)
-        counts = fold_df["split"].value_counts()
-        print(
-            f"  Fold {test_fold}: train={counts.get('train', 0):4d}  "
-            f"val={counts.get('val', 0):4d}  test={counts.get('test', 0):4d}  → {out.name}"
-        )
-
-    print(f"\nAll {N_FOLDS} CSVs saved to: {CSV_DIR}")
+FINETUNE_DIR = OUTPUT_DIR / "checkpoints" / "finetune" / SEGMENTATION_BACKEND
 
 
 def stage_finetune():
-    """Fine-tune PanDerm — one subprocess per fold."""
+    """Partial fine-tune PanDerm per fold, then write each fold's test predictions."""
     script = PIPELINE_DIR / "panderm" / "panderm_finetuning.py"
     if not script.exists():
         raise FileNotFoundError(f"Fine-tuning script not found: {script}")
-
-    for fold in range(N_FOLDS):
-        fold_out = OUTPUT_DIR / f"results_fold{fold}"
-        fold_out.mkdir(parents=True, exist_ok=True)
-
-        cmd = [
-            sys.executable, str(script),
-            "--fold",         str(fold),
-            "--data_root",    str(DATA_ROOT),
-            "--csv_dir",      str(CSV_DIR),
-            "--output_dir",   str(fold_out),
-            "--checkpoint",   str(CHECKPOINT_LARGE),
-            "--panderm_repo", str(PANDERM_CLASS),
-        ]
-        print(f"\n  Fold {fold}: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
-
-    print(f"\nAll folds done. Checkpoints: {OUTPUT_DIR}/results_fold{{0–{N_FOLDS-1}}}/checkpoint-best.pth")
+    cmd = [sys.executable, str(script)]
+    print(f"Running: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 
-def stage_extract_features(use_finetuned: bool = True):
-    """Extract CLS features using PanDerm and save to disk (GPU required)."""
+def stage_extract_features():
+    """Extract frozen (pretrained) PanDerm CLS features and save to disk (GPU required)."""
     script = PIPELINE_DIR / "panderm" / "extract_features.py"
     if not script.exists():
         raise FileNotFoundError(f"Extract features script not found: {script}")
-    mode = "finetune" if use_finetuned else "frozen"
-    cmd  = [sys.executable, str(script), "--mode", mode]
+    cmd  = [sys.executable, str(script), "--mode", "frozen"]
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 
 
 def stage_evaluate(use_finetuned: bool = True):
-    """Run logistic regression + generate all plots (CPU only)."""
+    """Metrics + plots: frozen via logistic regression, finetune via the saved head predictions."""
     script = PIPELINE_DIR / "panderm" / "evaluate.py"
     mode   = "finetune" if use_finetuned else "frozen"
     cmd    = [sys.executable, str(script), "--mode", mode]
@@ -279,15 +237,17 @@ def _stage_map():
         ),
         "make_csv": (
             stage_make_csv,
-            lambda: (CSV_DIR / "panderm_finetuning_fold0.csv").exists(),
+            lambda: (CSV_DIR / SEGMENTATION_BACKEND / "panderm_finetuning_fold0.csv").exists(),
         ),
         "finetune": (
             stage_finetune,
-            lambda: (OUTPUT_DIR / "results_fold0" / "checkpoint-best.pth").exists(),
+            lambda: (FINETUNE_DIR / f"results_fold{N_FOLDS - 1}" /
+                     f"test_predictions_fold{N_FOLDS - 1}.csv").exists(),
         ),
         "extract_features": (
             stage_extract_features,
-            lambda: (FEATURES_DIR / "patient_features_fold0.npy").exists(),
+            lambda: (OUTPUT_DIR / "features" / "frozen" / SEGMENTATION_BACKEND /
+                     "patient_features_fold0.npy").exists(),
         ),
         "evaluate": (
             stage_evaluate,
@@ -317,8 +277,9 @@ def main():
                       "extract_features", "evaluate",
                       "clinical_modality", "fusion"]
         else:
+            # no extract_features: fine-tuned models are scored with their own head
             to_run = ["prepare", "segment", "make_csv",
-                      "finetune", "extract_features", "evaluate",
+                      "finetune", "evaluate",
                       "clinical_modality", "fusion"]
     else:
         to_run = [args.stage]
@@ -339,9 +300,7 @@ def main():
     for stage_name in to_run:
         func, skip_check = stage_map[stage_name]
 
-        if stage_name == "extract_features":
-            bound_func = lambda f=use_finetuned: stage_extract_features(use_finetuned=f)
-        elif stage_name == "fusion":
+        if stage_name == "fusion":
             bound_func = lambda f=use_finetuned: stage_fusion(use_finetuned=f)
         elif stage_name == "evaluate":
             bound_func = lambda f=use_finetuned: stage_evaluate(use_finetuned=f)

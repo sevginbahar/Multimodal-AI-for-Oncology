@@ -47,13 +47,9 @@ class LesionSegmenter:
 class SAMSegmenter(LesionSegmenter):
     """
     SAM2, prompted with a centre point — dermoscopy lesions are
-    conventionally centred in the frame. The deep-learning segmenter in the
-    ablation, compared against ColorBasedSegmenter (classical Otsu).
+    conventionally centred in the frame.
 
-    Requires the OFFICIAL Meta package (not the generic PyPI "sam2" name,
-    which resolves to an unrelated third-party repackaging and can drag in
-    an unpinned torch that silently replaces your CUDA build with a CPU-only
-    one — hit this exact problem once already):
+    Requires the OFFICIAL Meta package :
         pip install "git+https://github.com/facebookresearch/sam2.git"
 
     Checkpoint auto-downloads from HuggingFace Hub on first use — no manual
@@ -62,8 +58,7 @@ class SAMSegmenter(LesionSegmenter):
     (could mean "the lesion", "the whole framed circle", etc.).
 
     UNTESTED against a real sam2 install as of writing — the exact
-    `SAM2ImagePredictor` API can drift between package versions. Smoke-test
-    this on one real image before trusting it on the dataset.
+    `SAM2ImagePredictor` API can drift between package versions.
     """
 
     def __init__(self, model_id: str = "facebook/sam2.1-hiera-small"):
@@ -119,8 +114,14 @@ def build_segmenter(backend: str) -> "LesionSegmenter | None":
         return ColorBasedSegmenter(MORPH_KERNEL_SIZE, MIN_LESION_RATIO)
     if backend == "sam":
         return SAMSegmenter()
+    if backend == "color_v2":
+        return ColorBasedSegmenterV2()
+    if backend == "sam_v2":
+        return PromptedSAMSegmenter()
+    if backend == "sam_v1_pre":
+        return SAMV1PreprocessedSegmenter()
     raise ValueError(f"Unknown SEGMENTATION_BACKEND: {backend!r} "
-                     f"(expected 'none', 'color', or 'sam')")
+                     f"(expected 'none', 'color', 'sam', 'color_v2', 'sam_v2' or 'sam_v1_pre')")
 
 
 class ColorBasedSegmenter(LesionSegmenter):
@@ -192,6 +193,242 @@ class ColorBasedSegmenter(LesionSegmenter):
         lcc = (labeled == largest_label).astype(np.uint8)
         lcc = ndimage.binary_fill_holes(lcc).astype(np.uint8)
         return lcc
+
+
+# ── v2 segmenters: field-of-view masking + DullRazor + prompted SAM ─────────
+# Fix the failure modes seen with "color"/"sam" on the in-house cohort:
+#   - Otsu picked the dark vignette / scope rim / corners as "lesion"
+#   - dark hairs got joined onto the lesion by morphological closing
+#   - SAM's single centre point was ambiguous (whole / part / sub-part) and
+#     argmax(score) favoured tiny sub-part masks
+# Masks are computed at WORK_SIZE (long side) on a hair-removed copy, then
+# upsampled to full resolution; the crop itself keeps the ORIGINAL pixels,
+# since inpainting also smooths pigment network / dots inside the lesion.
+
+WORK_SIZE = 1024
+
+
+def _odd(n: float) -> int:
+    n = max(3, int(round(n)))
+    return n if n % 2 else n + 1
+
+
+def to_work_res(image: np.ndarray) -> np.ndarray:
+    h, w = image.shape[:2]
+    scale = WORK_SIZE / max(h, w)
+    if scale >= 1:
+        return image
+    return cv2.resize(image, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+
+
+def dullrazor(rgb: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
+    """DullRazor-style hair removal (Lee et al., 1997): black-hat with a cross
+    kernel picks thin dark structures, threshold -> hair mask, then inpaint.
+    Kernel scales with image size (17 px at ~1000 px, as in common
+    implementations). Returns (hair-free RGB, hair mask)."""
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    k = _odd(0.017 * max(gray.shape))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT,
+                                cv2.getStructuringElement(cv2.MORPH_CROSS, (k, k)))
+    _, hair = cv2.threshold(cv2.GaussianBlur(blackhat, (3, 3), 0), 10, 255, cv2.THRESH_BINARY)
+    hair = cv2.dilate(hair, np.ones((3, 3), np.uint8))
+    return cv2.inpaint(rgb, hair, 5, cv2.INPAINT_TELEA), hair > 0
+
+
+def field_of_view_mask(rgb: np.ndarray) -> np.ndarray:
+    """Usable dermoscope field: excludes dark vignette corners / scope rim, i.e.
+    dark regions connected to the image border. The remaining field is eroded
+    by ~2% to drop the soft dark gradient at the rim. A dark lesion that
+    touches the frame is not removed because 'dark' is relative to the frame
+    centre and far darker than pigmented skin (<35% of the centre median)."""
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape
+    ref = float(np.median(gray[h // 4: 3 * h // 4, w // 4: 3 * w // 4]))
+    dark = (gray < max(20.0, 0.35 * ref)).astype(np.uint8)
+    n, lab = cv2.connectedComponents(dark)
+    border = np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))
+    outside = np.isin(lab, border[border > 0])
+    fov = ~outside
+    if outside.mean() > 0.01:   # there is a vignette -> strip the rim gradient too
+        k = _odd(0.02 * max(h, w))
+        fov = cv2.erode(fov.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    return fov if fov.mean() > 0.2 else np.ones_like(fov)
+
+
+def otsu_in_fov(rgb: np.ndarray, fov: np.ndarray,
+                morph_frac: float = 0.012, min_ratio: float = 0.01) -> "np.ndarray | None":
+    """Otsu on the L channel, threshold computed from field-of-view pixels only,
+    lesion = connected component with the largest area weighted by closeness
+    to the field-of-view centre (not simply the largest). None if nothing
+    plausible (< min_ratio of the field)."""
+    L = cv2.GaussianBlur(cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[:, :, 0], (_odd(0.01 * max(rgb.shape)),) * 2, 0)
+    t, _ = cv2.threshold(L[fov].reshape(-1, 1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    binary = ((L <= t) & fov).astype(np.uint8)
+    k = _odd(morph_frac * max(rgb.shape))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    binary = ndimage.binary_fill_holes(binary) & fov
+
+    n, lab, stats, cent = cv2.connectedComponentsWithStats(binary.astype(np.uint8))
+    if n <= 1:
+        return None
+    ys, xs = np.nonzero(fov)
+    cy, cx = ys.mean(), xs.mean()
+    radius = np.sqrt(fov.sum() / np.pi)
+    area = stats[1:, cv2.CC_STAT_AREA].astype(float)
+    dist = np.hypot(cent[1:, 0] - cx, cent[1:, 1] - cy) / radius
+    # Radial position of every pixel; a component lying mostly in the outer
+    # ring (r > 0.8) is a rim / corner / edge shadow remnant, not a lesion.
+    gy, gx = np.indices(fov.shape)
+    outer = np.hypot(gx - cx, gy - cy) / radius > 0.8
+    for c in 1 + np.argsort(-(area * np.exp(-dist ** 2))):
+        comp = lab == c
+        if comp.sum() < min_ratio * fov.sum():
+            break   # remaining candidates are smaller still
+        if (comp & outer).sum() / comp.sum() <= 0.6:
+            return comp
+    return None
+
+
+def _upsample(mask: np.ndarray, shape) -> np.ndarray:
+    return cv2.resize(mask.astype(np.uint8), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+
+
+class ColorBasedSegmenterV2(LesionSegmenter):
+    """Otsu inside the dermoscope field of view, on a DullRazor hair-removed
+    image, with centre-weighted component selection. Falls back to the field
+    of view (not the raw frame) when no plausible lesion is found.
+    `last_info` holds per-image QC values for process_dataset()."""
+
+    def __init__(self):
+        self.last_info = {}
+
+    def segment(self, image: np.ndarray) -> np.ndarray:
+        work = to_work_res(image)
+        clean, hair = dullrazor(work)
+        fov = field_of_view_mask(clean)
+        mask = otsu_in_fov(clean, fov)
+        self.last_info = {"hair_frac": float(hair.mean()), "fov_frac": float(fov.mean()),
+                          "fallback": mask is None}
+        if mask is None:
+            mask = fov
+        self.last_info["mask_frac_of_fov"] = float(mask.sum() / fov.sum())
+        return _upsample(mask, image.shape)
+
+
+class SAMV1PreprocessedSegmenter(LesionSegmenter):
+    """Ablation: SAM v1's prompt and selection on the v2 preprocessing.
+    Same working scale, DullRazor hair removal and field-of-view detection as
+    the v2 segmenters, then exactly SAM v1: ONE positive point at the image
+    centre, 3 candidates, highest SAM score kept — no box, no negative points,
+    no clean-up, no plausibility rules, no fallback. The mask is clipped to the
+    field of view. Compared with "sam" it isolates the preprocessing; compared
+    with "sam_v2" it isolates the Otsu-based prompt + selection.
+    If the image centre falls outside the field of view, the point moves to the
+    field's centre (recorded as point_moved)."""
+
+    def __init__(self, model_id: str = "facebook/sam2.1-hiera-small"):
+        self._sam = SAMSegmenter(model_id)   # reuse loading / install check
+        self.last_info = {}
+
+    def segment(self, image: np.ndarray) -> np.ndarray:
+        work = to_work_res(image)
+        clean, hair = dullrazor(work)
+        fov = field_of_view_mask(clean)
+        h, w = fov.shape
+        px, py = w // 2, h // 2
+        moved = not fov[py, px]
+        if moved:
+            ys, xs = np.nonzero(fov)
+            py, px = int(ys.mean()), int(xs.mean())
+
+        pred = self._sam.predictor
+        pred.set_image(clean)
+        masks, scores, _ = pred.predict(point_coords=np.array([[px, py]], dtype=np.float32),
+                                        point_labels=np.array([1]), multimask_output=True)
+        best = int(np.argmax(scores))
+        mask = masks[best].astype(bool) & fov
+        self.last_info = {"hair_frac": float(hair.mean()), "fov_frac": float(fov.mean()),
+                          "point_moved": moved, "sam_score": float(scores[best]),
+                          "mask_frac_of_frame": float(mask.mean()),
+                          "mask_frac_of_fov": float(mask.sum() / fov.sum()),
+                          "fallback": False}
+        return _upsample(mask, image.shape)
+
+
+class PromptedSAMSegmenter(LesionSegmenter):
+    """SAM2 with an unambiguous prompt instead of a lone centre point:
+      box      around the v2 Otsu lesion (+5%), or the central field of view
+               if Otsu found nothing
+      point +  deepest interior point of that lesion estimate
+      points - skin just outside the box, inside the field of view
+    Run on the hair-removed image. Of SAM's candidate masks, keep the
+    highest-scoring PLAUSIBLE one: contains the positive point, covers
+    MIN_AREA..MAX_AREA of the field of view, and lies inside the field.
+    If none is plausible, fall back to the Otsu estimate (then the field)."""
+
+    MIN_AREA, MAX_AREA = 0.02, 0.95
+
+    def __init__(self, model_id: str = "facebook/sam2.1-hiera-small"):
+        self._sam = SAMSegmenter(model_id)   # reuse loading / install check
+        self.last_info = {}
+
+    @staticmethod
+    def _prompts(prior: "np.ndarray | None", fov: np.ndarray):
+        h, w = fov.shape
+        region = prior if prior is not None else fov
+        ys, xs = np.nonzero(region)
+        y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+        if prior is None:   # no lesion estimate: central 60% of the field
+            cy, cx, hh, hw = (y0 + y1) / 2, (x0 + x1) / 2, 0.3 * (y1 - y0), 0.3 * (x1 - x0)
+            y0, y1, x0, x1 = cy - hh, cy + hh, cx - hw, cx + hw
+            pos = (int(cx), int(cy))
+        else:
+            dt = cv2.distanceTransform(prior.astype(np.uint8), cv2.DIST_L2, 5)
+            py, px = np.unravel_index(np.argmax(dt), dt.shape)
+            pos = (int(px), int(py))
+        py_, px_ = 0.05 * (y1 - y0), 0.05 * (x1 - x0)
+        box = np.array([max(0, x0 - px_), max(0, y0 - py_), min(w - 1, x1 + px_), min(h - 1, y1 + py_)])
+        # negative points: midway between each box edge and the field edge, if that spot is in the field
+        bx0, by0, bx1, by1 = box
+        mx, my = (bx0 + bx1) / 2, (by0 + by1) / 2
+        cand = [(bx0 / 2, my), ((bx1 + w) / 2, my), (mx, by0 / 2), (mx, (by1 + h) / 2)]
+        neg = [(int(x), int(y)) for x, y in cand if 0 <= int(y) < h and 0 <= int(x) < w and fov[int(y), int(x)]]
+        return box, pos, neg
+
+    def segment(self, image: np.ndarray) -> np.ndarray:
+        work = to_work_res(image)
+        clean, hair = dullrazor(work)
+        fov = field_of_view_mask(clean)
+        prior = otsu_in_fov(clean, fov)
+        box, pos, neg = self._prompts(prior, fov)
+
+        pred = self._sam.predictor
+        pred.set_image(clean)
+        coords = np.array([pos] + neg, dtype=np.float32)
+        labels = np.array([1] + [0] * len(neg))
+        masks, scores, _ = pred.predict(point_coords=coords, point_labels=labels,
+                                        box=box, multimask_output=True)
+        fov_area = fov.sum()
+        best, best_score = None, -1.0
+        for m, s in zip(masks.astype(bool), scores):
+            # SAM masks carry speckle islands / holes at the border: keep only the
+            # component containing the positive point, then fill its holes
+            if m[pos[1], pos[0]]:
+                _, lab = cv2.connectedComponents(m.astype(np.uint8))
+                m = ndimage.binary_fill_holes(lab == lab[pos[1], pos[0]])
+            frac = (m & fov).sum() / fov_area
+            if (m[pos[1], pos[0]] and self.MIN_AREA <= frac <= self.MAX_AREA
+                    and (m & ~fov).sum() <= 0.05 * m.sum() and s > best_score):
+                best, best_score = m & fov, float(s)
+
+        source = "sam" if best is not None else ("otsu" if prior is not None else "fov")
+        mask = best if best is not None else (prior if prior is not None else fov)
+        self.last_info = {"hair_frac": float(hair.mean()), "fov_frac": float(fov.mean()),
+                          "fallback": source != "sam", "mask_source": source,
+                          "sam_score": best_score if best is not None else np.nan,
+                          "mask_frac_of_fov": float(mask.sum() / fov_area)}
+        return _upsample(mask, image.shape)
 
 
 def apply_mask_and_crop(
@@ -279,6 +516,7 @@ def process_dataset(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     segmented_paths = []
+    qc_rows = []   # per-image diagnostics from segmenters that expose `last_info` (v2)
     n_total = len(df)
     n_fallback = 0
 
@@ -310,8 +548,13 @@ def process_dataset(
         # Segment
         mask = segmenter.segment(image)
 
-        # Check if fallback (full image)
-        if mask.sum() == mask.shape[0] * mask.shape[1]:
+        # Check if fallback (full image, or the v2 segmenters' own fallback flag)
+        info = getattr(segmenter, "last_info", None)
+        if info:
+            qc_rows.append({"image_path": str(img_path), "diagnosis": diagnosis,
+                            "patient_id": row["patient_id"], **info})
+            n_fallback += int(info.get("fallback", False))
+        elif mask.sum() == mask.shape[0] * mask.shape[1]:
             n_fallback += 1
 
         # Crop and save
@@ -324,7 +567,11 @@ def process_dataset(
             print(f"  [{idx + 1}/{n_total}] processed")
 
     df["segmented_path"] = segmented_paths
-    print(f"\nSegmentation complete: {n_total} images, {n_fallback} fallbacks to full image")
+    print(f"\nSegmentation complete: {n_total} images, {n_fallback} fallbacks")
+    if qc_rows:
+        qc_path = output_dir / f"segmentation_qc_{backend}.csv"
+        pd.DataFrame(qc_rows).to_csv(qc_path, index=False)
+        print(f"Per-image QC ({len(qc_rows)} newly segmented images): {qc_path}")
     return df
 
 

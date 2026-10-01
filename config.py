@@ -11,8 +11,18 @@ from pathlib import Path
 # evaluate) its own separate output location. Nothing from one backend can
 # silently overwrite another's manifest / features / results.
 #   "none"  -> no segmentation; segmented_path = image_path (the raw PanDerm-frozen arm)
-#   "color" -> LAB + Otsu + morphological closing (ColorBasedSegmenter)
-#   "sam"   -> SAM2, centre-point prompt (needs `pip install` — see segment_lesions.py)
+#   "color"    -> LAB + Otsu + morphological closing (ColorBasedSegmenter)
+#   "sam"      -> SAM2, centre-point prompt (needs `pip install` — see segment_lesions.py)
+#   "color_v2" -> Otsu inside the dermoscope field of view (vignette/rim removed),
+#                 on a DullRazor hair-removed copy, centre-weighted component
+#                 (ColorBasedSegmenterV2)
+#   "sam_v2"   -> SAM2 prompted with box + positive/negative points from the
+#                 color_v2 estimate, mask chosen by plausibility, on the
+#                 hair-removed copy (PromptedSAMSegmenter)
+#   "sam_v1_pre" -> ablation: v2 preprocessing (1024 px, DullRazor, field of view)
+#                 + SAM v1 prompt (one image-centre point, highest score), mask
+#                 clipped to the field of view (SAMV1PreprocessedSegmenter)
+#   v2 crops keep the original pixels; hair removal is used only to find the mask.
 # ============================================================
 
 # ============================================================
@@ -31,15 +41,10 @@ USE_SEGMENTATION  = True
 MORPH_KERNEL_SIZE = 15    # kernel for morphological closing
 MIN_LESION_RATIO  = 0.01  # fallback to full image if mask < 1% of area
 CROP_MARGIN       = 0.1   # 10% margin around lesion bounding box
-SEGMENTATION_BACKEND = "none"  # "none", "color", or "sam" (needs `pip install` — see segment_lesions.py)
+SEGMENTATION_BACKEND = "sam_v1_pre"  # "none", "color", "sam", "color_v2", "sam_v2", "sam_v1_pre" (see top of file)
 
-# --- ISIC cohort ---
-# DATA_ROOT  = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\isic_pipeline\\dermoscopy")
-# OUTPUT_DIR = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\isic_pipeline\\outputs")
-
-# --- In-house cohort ---
-DATA_ROOT  = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\dermoscopy\\dermoscopy")
-OUTPUT_DIR = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\inhouse_pipeline\\outputs")
+DATA_ROOT  = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\dermoscopy")
+OUTPUT_DIR = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\inhouse_pipeline\\outputs")
 
 SEGMENTED_DIR = OUTPUT_DIR / "segmented_cache"
 FEATURES_DIR  = OUTPUT_DIR / "features" / SEGMENTATION_BACKEND
@@ -47,18 +52,32 @@ EVAL_DIR      = OUTPUT_DIR / "results" / SEGMENTATION_BACKEND
 CSV_DIR       = OUTPUT_DIR / "cross-fold-csv"
 
 METADATA_CSV  = None  # set to a CSV path for flat-folder datasets (e.g. MILK10K)
-PANDERM_REPO  = Path("C:\\content\\PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
+PANDERM_REPO  = Path("C:\\Users\\qp263329\\PanDerm")   # git clone https://github.com/SiyuanYan1/PanDerm.git
 PANDERM_CLASS = PANDERM_REPO / "classification"
 
-CHECKPOINT_LARGE = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\panderm_ll_data6_checkpoint-499.pth")
-CHECKPOINT_BASE  = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\panderm_bb_data6_checkpoint-499.pth")
+CHECKPOINT_LARGE = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\panderm_ll_data6_checkpoint-499.pth")
+CHECKPOINT_BASE  = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\panderm_bb_data6_checkpoint-499.pth")
 
-PIPELINE_DIR  = Path("C:\\Users\\bahar sevgin\\Desktop\\Multimodal-AI-for-Oncology")
-CLINICAL_DIR   = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\clinical_outputs")
-CLINICAL_INPUT = Path("C:\\Users\\bahar sevgin\\Desktop\\phd_data\\harmonized_pathology_reports.csv")  # raw clinical data
+PIPELINE_DIR  = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\Multimodal-AI-for-Oncology")
+CLINICAL_DIR   = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\clinical_outputs")
+CLINICAL_INPUT = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\harmonized_pathology_reports.csv")  # raw clinical data
 
 print(f"[config] DATA_ROOT={DATA_ROOT}")
 print(f"[config] OUTPUT_DIR={OUTPUT_DIR}  FEATURES_DIR={FEATURES_DIR}")
+
+
+def input_image(image_path) -> str:
+    """The image the model should see for a manifest row, under the CURRENT
+    SEGMENTATION_BACKEND: the raw image for "none", otherwise its crop in
+    segmented_cache/<backend>/, which mirrors DATA_ROOT's <class>/<patient>/<file>.
+
+    Derived from image_path rather than read from the manifest's segmented_path
+    column, because every segment run overwrites that column — it holds
+    whichever backend was segmented last, not the one configured now.
+    """
+    if SEGMENTATION_BACKEND == "none":
+        return str(image_path)
+    return str(SEGMENTED_DIR / SEGMENTATION_BACKEND / Path(image_path).relative_to(DATA_ROOT))
 
 # ============================================================
 # Class definitions
