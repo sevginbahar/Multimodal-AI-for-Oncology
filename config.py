@@ -22,6 +22,9 @@ from pathlib import Path
 #   "sam_v1_pre" -> ablation: v2 preprocessing (1024 px, DullRazor, field of view)
 #                 + SAM v1 prompt (one image-centre point, highest score), mask
 #                 clipped to the field of view (SAMV1PreprocessedSegmenter)
+#   "panderm_seg" -> PanDerm-L + UPerNet trained on ISIC 2018 with the authors'
+#                 code; masks made by panderm/segment_panderm_seg.py (dermseg env).
+#                 Mask-guided pooling only (no segmenter here, no crops).
 #   v2 crops keep the original pixels; hair removal is used only to find the mask.
 # ============================================================
 
@@ -41,10 +44,12 @@ USE_SEGMENTATION  = True
 MORPH_KERNEL_SIZE = 15    # kernel for morphological closing
 MIN_LESION_RATIO  = 0.01  # fallback to full image if mask < 1% of area
 CROP_MARGIN       = 0.1   # 10% margin around lesion bounding box
-SEGMENTATION_BACKEND = "sam_v1_pre"  # "none", "color", "sam", "color_v2", "sam_v2", "sam_v1_pre" (see top of file)
+SEGMENTATION_BACKEND = "panderm_seg"  # "none", "color", "sam", "color_v2", "sam_v2", "sam_v1_pre", "panderm_seg" (see top of file)
 
-DATA_ROOT  = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\dermoscopy")
-OUTPUT_DIR = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\inhouse_pipeline\\outputs")
+# DATA_ROOT  = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\dermoscopy")
+# OUTPUT_DIR = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\inhouse_pipeline\\outputs")
+DATA_ROOT  = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\public_dermoscopy_histo_MSK-2_PROVe-AI")
+OUTPUT_DIR = Path("C:\\Users\\qp263329\\OneDrive - Queen Mary, University of London\\Desktop\\PhD_Data\\public_histo_MSK-2_PROVe-AI_pipeline\\outputs")
 
 SEGMENTED_DIR = OUTPUT_DIR / "segmented_cache"
 FEATURES_DIR  = OUTPUT_DIR / "features" / SEGMENTATION_BACKEND

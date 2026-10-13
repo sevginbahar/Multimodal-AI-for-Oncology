@@ -56,7 +56,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, GridSearchCV
+from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold, GridSearchCV
 from sklearn.metrics import (
     balanced_accuracy_score, accuracy_score,
     classification_report, confusion_matrix,
@@ -169,14 +169,22 @@ def run_kfold_evaluation(patient_labels, group_ids, fold_assignments):
         X_tr, y_tr = patient_features[train_mask], patient_labels[train_mask]
         X_te, y_te = patient_features[test_mask],  patient_labels[test_mask]
 
-        inner_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+        # Inner split for choosing C. Rows are patient__diagnosis groups; a patient with lesions in
+        # several classes has several rows, which must stay on one side of the inner split too.
+        # If every patient has one row (e.g. the in-house cohort) the plain splitter is kept, so
+        # those results are unchanged; otherwise the split is grouped by patient.
+        tr_patients = np.array([g.split("__")[0] for g, t in zip(group_ids, train_mask) if t])
+        if len(np.unique(tr_patients)) < len(tr_patients):
+            inner_cv, inner_groups = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=42), tr_patients
+        else:
+            inner_cv, inner_groups = StratifiedKFold(n_splits=3, shuffle=True, random_state=42), None
         gs = GridSearchCV(
             LogisticRegression(max_iter=LOGREG_MAX_ITER, class_weight="balanced",
                                solver="lbfgs", random_state=42),
             param_grid={"C": [0.01, 0.03, 0.1, 0.3, 1.0]},
             cv=inner_cv, scoring="balanced_accuracy", n_jobs=-1,
         )
-        gs.fit(X_tr, y_tr)
+        gs.fit(X_tr, y_tr, groups=inner_groups)
         best_c = gs.best_params_["C"]
         clf    = gs.best_estimator_
         y_pred  = clf.predict(X_te)

@@ -98,7 +98,7 @@ def create_kfold_splits(df: pd.DataFrame, n_folds: int, seed: int) -> pd.DataFra
     Groups = patient_id  (ensures no patient leaks across folds)
     Stratification = per-patient majority label
 
-    For the 3 multi-class patients (same person, different diagnoses),
+    For multi-class patients (same person, different diagnoses),
     all their images land in the same fold regardless of class.
     """
     # Build a per-patient label for stratification (majority vote)

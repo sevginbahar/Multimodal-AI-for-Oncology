@@ -50,11 +50,9 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
-from collections import OrderedDict
-
 from config import (OUTPUT_DIR, DATA_ROOT, SEGMENTATION_BACKEND, N_FOLDS,
-                    IMAGENET_MEAN, IMAGENET_STD, CLASS_LABELS,
-                    PANDERM_CLASS, CHECKPOINT_LARGE, NB_CLASSES)
+                    IMAGENET_MEAN, IMAGENET_STD, CLASS_LABELS)
+from panderm.archive.attention_comparison import load_frozen_encoder
 
 GRID, PATCH = 14, 16
 MASK_DIR = OUTPUT_DIR / "features" / "maskguided" / SEGMENTATION_BACKEND / "masks"
@@ -66,22 +64,6 @@ _resize_crop_mask = transforms.Compose([
     transforms.CenterCrop(224)])
 _to_tensor = transforms.Compose([transforms.ToTensor(),
                                  transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
-
-
-def load_frozen_encoder() -> torch.nn.Module:
-    """Pretrained PanDerm-L, same loading as extract_features.py (frozen, eval mode)."""
-    for p in [str(PANDERM_CLASS.parent), str(PANDERM_CLASS)]:
-        if p not in sys.path:
-            sys.path.insert(0, p)
-    from models.modeling_finetune import panderm_large_patch16_224
-    model = panderm_large_patch16_224(num_classes=NB_CLASSES)
-    ckpt = torch.load(str(CHECKPOINT_LARGE), map_location="cpu", weights_only=False)
-    state = ckpt.get("model", ckpt.get("state_dict", ckpt))
-    clean = OrderedDict((k.replace("encoder.", "").replace("module.", ""), v) for k, v in state.items())
-    missing, unexpected = model.load_state_dict(clean, strict=False)
-    print(f"Frozen encoder loaded: missing={len(missing)} unexpected={len(unexpected)} "
-          f"(missing = new head, unexpected = SSL decoder — both expected)")
-    return model.eval().to(DEVICE)
 
 
 @torch.no_grad()

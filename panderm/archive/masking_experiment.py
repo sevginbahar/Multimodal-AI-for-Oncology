@@ -39,7 +39,7 @@ import pandas as pd
 from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from attention_comparison import (
+from panderm.archive.attention_comparison import (
     load_frozen_encoder, raw_attention_map, attention_metrics, cache_path, pigment_score, RES_DIR,
 )
 

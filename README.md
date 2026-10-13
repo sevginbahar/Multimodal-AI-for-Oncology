@@ -28,8 +28,6 @@ Lesion-linked melanocytic lesion cohort (Maiques Lab).
 - 5-fold cross-validation, **patient-level** (`StratifiedGroupKFold`, seed 42) — no patient appears in more than one fold. `prepare_data.py` is deterministic: re-running it reproduces the same folds.
 - 11 patient folders in the raw export contain no image and are excluded.
 
-> **Known data issue (to be fixed before final results):** two DN patient folders contain byte-identical copies of another patient's images — `14165882` = images of `14149067`, `14173497` = images of `14293082` — and these pairs fall in different folds (train/test leakage affecting all methods equally). Two further within-patient duplicates exist (`10136423 (7) - Copy.JPG`, two identical files in `Minsitu/14252811`). All results below still include them.
-
 ---
 
 ## Results
@@ -38,19 +36,19 @@ All numbers: patient-level 5-fold CV, mean ± SD across folds. With ~32 test pat
 
 ### Image model (frozen PanDerm-L unless stated, Sep 2026 run)
 
-| Experiment | Segmentation | Balanced Acc | Macro AUC | Macro F1 |
-|---|---|:-:|:-:|:-:|
-| Frozen – CLS token | none (raw image) | 0.570 ± 0.087 | 0.751 ± 0.055 | 0.568 ± 0.085 |
-| Frozen – mean of all patch tokens | none (raw image) | 0.577 ± 0.076 | 0.753 ± 0.053 | 0.573 ± 0.075 |
-| Frozen – CLS on crop | Otsu v1 | 0.563 ± 0.058 | 0.729 ± 0.033 | 0.556 ± 0.058 |
-| Frozen – CLS on crop | Otsu v2 | 0.485 ± 0.083 | 0.699 ± 0.067 | 0.479 ± 0.074 |
-| Frozen – CLS on crop | SAM2 v1 | 0.504 ± 0.061 | 0.695 ± 0.054 | 0.492 ± 0.059 |
-| Frozen – CLS on crop | SAM2 v1 + preprocessing | 0.527 ± 0.059 | 0.697 ± 0.016 | 0.521 ± 0.074 |
-| Frozen – CLS on crop | SAM2 v2 | 0.521 ± 0.040 | 0.732 ± 0.049 | 0.519 ± 0.035 |
-| Mask-guided pooling | Otsu v2 masks | 0.589 ± 0.035 | 0.768 ± 0.041 | 0.588 ± 0.036 |
-| Mask-guided pooling | SAM2 v1 + preprocessing masks | 0.534 ± 0.037 | 0.729 ± 0.034 | 0.531 ± 0.033 |
-| **Mask-guided pooling** | **SAM2 v2 masks** | **0.609 ± 0.029** | **0.767 ± 0.047** | **0.607 ± 0.029** |
-| Partial fine-tune (blocks 18–23 + head) | none (raw image) | 0.528 ± 0.058 | 0.713 ± 0.047 | 0.518 ± 0.062 |
+| Experiment | Segmentation | Balanced Acc | Macro AUC | Macro F1 | Cohen κ |
+|---|---|:-:|:-:|:-:|:-:|
+| Frozen – CLS token | none (raw image) | 0.570 ± 0.087 | 0.751 ± 0.055 | 0.568 ± 0.085 | 0.362 ± 0.130 |
+| Frozen – mean of all patch tokens | none (raw image) | 0.577 ± 0.076 | 0.753 ± 0.053 | 0.573 ± 0.075 | 0.372 ± 0.117 |
+| Frozen – CLS on crop | Otsu v1 | 0.563 ± 0.058 | 0.729 ± 0.033 | 0.556 ± 0.058 | 0.351 ± 0.088 |
+| Frozen – CLS on crop | Otsu v2 | 0.485 ± 0.083 | 0.699 ± 0.067 | 0.479 ± 0.074 | 0.242 ± 0.122 |
+| Frozen – CLS on crop | SAM2 v1 | 0.504 ± 0.061 | 0.695 ± 0.054 | 0.492 ± 0.059 | 0.263 ± 0.088 |
+| Frozen – CLS on crop | SAM2 v1 + preprocessing | 0.527 ± 0.059 | 0.697 ± 0.016 | 0.521 ± 0.074 | 0.297 ± 0.089 |
+| Frozen – CLS on crop | SAM2 v2 | 0.521 ± 0.040 | 0.732 ± 0.049 | 0.519 ± 0.035 | 0.290 ± 0.060 |
+| Mask-guided pooling | Otsu v2 masks | 0.589 ± 0.035 | 0.768 ± 0.041 | 0.588 ± 0.036 | 0.390 ± 0.055 |
+| Mask-guided pooling | SAM2 v1 + preprocessing masks | 0.534 ± 0.037 | 0.729 ± 0.034 | 0.531 ± 0.033 | 0.308 ± 0.057 |
+| **Mask-guided pooling** | **SAM2 v2 masks** | **0.609 ± 0.029** | **0.767 ± 0.047** | **0.607 ± 0.029** | **0.418 ± 0.047** |
+| Partial fine-tune (blocks 18–23 + head) | none (raw image) | 0.528 ± 0.058 | 0.713 ± 0.047 | 0.518 ± 0.062 | 0.295 ± 0.088 |
 
 Reading the image results:
 
@@ -73,11 +71,11 @@ Otsu v2 and SAM2 v2 masks agree closely (median IoU 0.90, 3.5% of images below I
 
 ### Earlier results (Otsu v1 crops, previous machine — not re-run since the restructure)
 
-| Model | Eval set | Balanced Acc | Macro AUC | Macro F1 |
-|-------|:--------:|:------------:|:---------:|:--------:|
-| PanDerm Large (frozen) — Otsu v1 crops | 163 pt | 0.569 ± 0.061 | 0.729 ± 0.033 | 0.561 ± 0.058 |
-| **BioClinicalBERT — reports** | 174 pt | **0.852 ± 0.062** | **0.953 ± 0.023** | **0.852 ± 0.060** |
-| Late Fusion (frozen PanDerm + BioClinicalBERT) | 156 pt | 0.739 ± 0.060 | 0.896 ± 0.036 | 0.738 ± 0.059 |
+| Model | Eval set | Balanced Acc | Macro AUC | Macro F1 | Cohen κ |
+|-------|:--------:|:------------:|:---------:|:--------:|:-------:|
+| PanDerm Large (frozen) — Otsu v1 crops | 163 pt | 0.569 ± 0.061 | 0.729 ± 0.033 | 0.561 ± 0.058 | 0.361 ± 0.091 |
+| **BioClinicalBERT — reports** | 174 pt | **0.852 ± 0.062** | **0.953 ± 0.023** | **0.852 ± 0.060** | **0.776 ± 0.091** |
+| Late Fusion (frozen PanDerm + BioClinicalBERT) | 156 pt | 0.739 ± 0.060 | 0.896 ± 0.036 | 0.738 ± 0.059 | 0.612 ± 0.089 |
 
 Per class (F1 / AUC, mean ± SD):
 
